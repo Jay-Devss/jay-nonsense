@@ -194,7 +194,7 @@ end
 
 -- #start
 _S.AppName = "Exotic Hub"
-_S.CurentV = "v1.37.5"
+_S.CurentV = "v1.38.3"
 
 local Varz = {}
 Varz.dev_tools = true
@@ -439,10 +439,9 @@ end
 
 -- save for mutations and others
 local FOtherSettings = {
-    alienevent                                 = {
+    rainbowevent                               = {
         enabled = false,
-        autosubmit = false,
-        avoid_pets = {},
+
     },
     enhance_cooldown                           = 0.35,
     swap_enchancer                             = false,
@@ -537,6 +536,11 @@ local FOtherSettings = {
     g_fruit_weight_min                         = 0,
     is_fall_event_running                      = false,
     is_fall_event_fastmode                     = false,
+    is_auto_egghunt                            = false,
+    is_autosell_event                          = true,
+    is_auto_plantseedEvent                     = false,
+    autoplacesprinklers                        = {},
+    enable_autoplacesprinklers                 = false,
     newyear_dailyclaim                         = false,
     is_fall_questline_auto                     = false,
     is_fall_questline_reroll                   = false,
@@ -924,6 +928,7 @@ local FSettings = {
     pet_pickplace_equipe_delay = 0.13,
 
     sell_pets = {
+        -- true = sell and false = keep
         -- Eggs [dont need, no one can get it]
         -- Exotic Bug Egg [is same as bug egg, dont need]
         -- Pet Eggs [dont need]
@@ -931,6 +936,21 @@ local FSettings = {
         -- Premium Christmas Egg | Premium Primal | Egg Premium Anti Bee Egg || Premium Oasis Egg (dont need these, same as normal versions)
         -- Premium Winter Egg
         -- Premium New Year's Egg
+
+
+        ["Gilded Choc Golden Egg"] = {
+            ["Gilded Choc Easter Egg Chick"] = false,
+            ["Gilded Choc Marshmallow Lamb"] = false,
+            ["Gilded Choc Easter Bunny"] = false,
+            ["Gilded Choc Chocolate Bunny"] = false
+        },
+
+        ["Golden Egg"] = {
+            ["Easter Egg Chick"] = true,
+            ["Chocolate Bunny"] = true,
+            ["Marshmallow Lamb"] = false,
+            ["Easter Bunny"] = false
+        },
 
         ["Rainbow Premium Bird Egg"] = {
             ["Rainbow Brown Owl"] = false,
@@ -1177,6 +1197,10 @@ local FSettings = {
     },
 
     eggs_to_place_array = {
+        ["Golden Egg"] = { enabled = false, order = 2, color = Color3.fromRGB(255, 204, 0) },                       -- Rich gold (standard tier)
+        ["Premium Golden Egg"] = { enabled = false, order = 2, color = Color3.fromRGB(255, 223, 120) },             -- Soft luminous gold (premium tier)
+        ["Gilded Choc Golden Egg"] = { enabled = false, order = 2, color = Color3.fromRGB(210, 150, 90) },          -- Chocolate gold (variant tier)
+        ["Gilded Choc Premium Golden Egg"] = { enabled = false, order = 2, color = Color3.fromRGB(235, 180, 120) }, -- Creamy gilded cocoa (premium variant)
         ["Bird Egg"] = { enabled = false, order = 2, color = Color3.fromRGB(242, 201, 76) },                        -- Warm amber (standard tier)
         ["Premium Bird Egg"] = { enabled = false, order = 2, color = Color3.fromRGB(255, 215, 120) },               -- Soft gold (premium tier)
         ["Rainbow Premium Bird Egg"] = { enabled = false, order = 2, color = Color3.fromRGB(180, 120, 255) },       -- Iridescent violet (elite tier)
@@ -1766,65 +1790,6 @@ _Helper.PassiveBio = {}
 
 
 
-
-_Helper.CompilePassiveBiox = function(petName, data, petLevel)
-    if not data or not data.Description then return "No description available." end
-
-    -- 1. DEFINE UTILITY FUNCTIONS FOR FORMATTING
-    local function FormatColonTime(seconds)
-        if not seconds then return "0:00" end
-        local m = math.floor(seconds / 60)
-        local s = math.floor(seconds % 60)
-        return string.format("%d:%02d", m, s)
-    end
-
-    local function Round(num, numDecimalPlaces)
-        local mult = 10 ^ (numDecimalPlaces or 2)
-        return math.floor(num * mult + 0.5) / mult
-    end
-
-    local desc = data.Description
-    local states = data.States or {}
-    local currentLevel = petLevel or 1 -- Default to Level 1 stats
-
-    -- Replace placeholders like <Cooldown> or <Chance>
-    local processedDesc = desc:gsub("<([%w_]+)>", function(statKey)
-        local stateData = states[statKey]
-
-        -- If state doesn't exist, keep the tag (e.g. <Unknown>)
-        if not stateData then return "<" .. statKey .. ">" end
-
-        -- Calculate Dynamic Value: Base + (Scale * Level)
-        -- Note: Adjust (currentLevel) to (currentLevel - 1) if stats start strictly at Base
-        local val = (stateData.Base or 0) + ((stateData.Scale or 0) * currentLevel)
-
-        -- Apply Limits (Min/Max)
-        -- If scaling is positive, Max is the ceiling.
-        if stateData.Scale and stateData.Scale > 0 and stateData.Max then
-            val = math.min(val, stateData.Max)
-        end
-        -- If scaling is negative (cooldown reduction), Min is the floor.
-        if stateData.Scale and stateData.Scale < 0 and stateData.Min then
-            val = math.max(val, stateData.Min)
-        end
-
-        -- Apply Formatters
-        if stateData.Formatter == "ColonTime" then
-            return FormatColonTime(val)
-        elseif stateData.Formatter == "Percentage" then
-            -- Usually 0.5 becomes 50%
-            return Round(val * 100, 1)
-        elseif stateData.Formatter == "NoPrecision" then
-            return math.floor(val)
-        else
-            -- Standard number formatting
-            return Round(val, 2)
-        end
-    end)
-
-    return processedDesc
-end
-
 _Helper.CompilePassiveBio = function(petName, data, petLevel)
     if not data or not data.Description then return "No description available." end
 
@@ -2392,11 +2357,14 @@ Varz.SeedRarity = {}
 -- Get all plants / seeds
 local function FetchAllSeedNames()
     local xall_seed_names = {}
-    for _, seed in pairs(_S.SeedData) do
+    for keyx, seed in pairs(_S.SeedData) do
         if seed.SeedName then
             local name = seed.SeedName
             local SeedRarity = seed.SeedRarity
             -- Removes " Seed" from the end of the name for a cleaner list
+            if keyx == "Easter Chocolate Coconut" and name == "Chocolate Coconut" then
+                name = keyx
+            end
             name = name:gsub("%s+Seed$", "")
             Varz.SeedRarity[name] = SeedRarity
             table.insert(xall_seed_names, name)
@@ -2513,6 +2481,226 @@ _Helper.GetAllPets = function()
 
     return allPets
 end
+
+
+-- #click
+GameDataManager.Clicker = {
+
+    ClickButton = function(button1)
+        if not button1 then
+            return false
+        end
+
+        pcall(function()
+            local activated = getconnections(button1.Activated)
+            if #activated > 0 then
+                for _, v in pairs(activated) do v:Fire() end
+            end
+            local down = getconnections(button1.MouseButton1Down)
+            if #down > 0 then
+                for _, v in pairs(down) do v:Fire() end
+            end
+        end)
+    end,
+
+}
+
+
+
+-- #proxi #ProximityPrompt
+GameDataManager.ProximityPrompt = {
+    ActivateProximityPrompt = function(prompt)
+        if not prompt or not prompt:IsA("ProximityPrompt") then return end
+
+        -- Temporarily override the hold duration
+        local oldHold = prompt.HoldDuration
+        local old_MaxActivationDistance = prompt.MaxActivationDistance
+        prompt.HoldDuration = 0
+        prompt.MaxActivationDistance = 10000
+
+        fireproximityprompt(prompt)
+        -- Restore original hold duration
+        prompt.HoldDuration = oldHold
+        prompt.MaxActivationDistance = old_MaxActivationDistance
+    end,
+    FindProximityPrompt = function(ob, _name)
+        local pname = _name or "ProximityPrompt"
+        for _, descendant in ipairs(ob:GetDescendants()) do
+            if descendant.Name == pname and descendant:IsA("ProximityPrompt") then
+                return descendant
+            end
+        end
+
+        return nil
+    end
+}
+
+
+
+
+
+-- #teleport #tp
+local characterConn
+GameDataManager.Teleport = {
+
+    isAtLocation = function(targetCFrame, studs)
+        local success, fal = pcall(function()
+            local player = _S.LocalPlayer
+            local character = player.Character
+            local max_d = studs or 30
+
+            -- Safety checks to make sure character exists
+            if not character then return false end
+            local hrp = character:FindFirstChild("HumanoidRootPart")
+            if not hrp then return false end
+
+            -- Check the distance
+            local distance = (hrp.Position - targetCFrame.Position).Magnitude
+            return distance <= max_d
+        end)
+
+
+        if success then
+            return fal
+        else
+            warn("Error isAtLocation ", fal)
+        end
+    end,
+
+    isAtLocationIgnoreY = function(targetCFrame, studs)
+        local success, result = pcall(function()
+            local player = game:GetService("Players").LocalPlayer
+            if not player or not player.Character then return false end
+
+            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+            if not hrp then return false end
+
+            -- Create flat Vector3s (ignoring the Y/Height)
+            local playerPos = Vector3.new(hrp.Position.X, 0, hrp.Position.Z)
+            local targetPos = Vector3.new(targetCFrame.Position.X, 0, targetCFrame.Position.Z)
+
+            -- Check flat distance
+            local distance = (playerPos - targetPos).Magnitude
+            local am = studs or 20
+
+            -- Optional: Print distance to debug if it keeps looping
+            -- print("Horizontal Dist:", distance)
+
+            return distance <= am -- Checks if you are within 150 studs horizontally
+        end)
+
+        if success then
+            return result
+        else
+            warn("Error in isAtLocation check:", result)
+            return false
+        end
+    end,
+    GetCurrentPosition = function()
+        local player = _S.LocalPlayer
+        local character = player.Character
+        if not character then
+            return nil
+        end
+
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            return hrp.CFrame
+        end
+
+        if character.PrimaryPart then
+            return character.PrimaryPart.CFrame
+        end
+
+        local part = character:FindFirstChildWhichIsA("BasePart")
+        if part then
+            return part.CFrame
+        end
+
+        return nil
+    end,
+    TeleportToCFrame = function(targetCFrame, tp_top)
+        local success, err = pcall(function()
+            local player = _S.LocalPlayer
+            if not player then
+                error("LocalPlayer is nil")
+            end
+
+            if tp_top then
+                targetCFrame = targetCFrame + Vector3.new(0, 10, 0)
+            end
+
+            local function setCFrame(character)
+                local hrp = character:FindFirstChild("HumanoidRootPart")
+                if not hrp then
+                    error("HumanoidRootPart not found")
+                end
+                hrp.CFrame = targetCFrame
+            end
+
+            if player.Character then
+                setCFrame(player.Character)
+            end
+
+            player.CharacterAdded:Connect(function(character)
+                character:WaitForChild("HumanoidRootPart")
+                setCFrame(character)
+            end)
+        end)
+
+        if not success then
+            warn("[TeleportToCFrame ERROR]", err)
+        end
+    end,
+    TeleportTo = function(model, tp_under)
+        if not model then
+            warn("Teleport: invalid model")
+            return
+        end
+        local player = _S.LocalPlayer
+
+        local currentCF
+
+        -- Determine CFrame
+        if model:IsA("Model") then
+            currentCF = model:GetPivot()
+        else -- BasePart
+            currentCF = model.CFrame
+        end
+
+        local targetCFrame = currentCF
+
+        -- [[ ADDED LOGIC ]] --
+
+        if tp_under then
+            targetCFrame = targetCFrame + Vector3.new(0, 10, 0)
+        end
+        -- [[ END LOGIC ]] --
+
+        local function setCFrame(character)
+            local hrp = character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                hrp.CFrame = targetCFrame
+            end
+        end
+
+        -- Teleport immediately if character exists
+        if player.Character then
+            setCFrame(player.Character)
+        end
+
+        -- Prevent stacking connections
+        if characterConn then
+            characterConn:Disconnect()
+        end
+
+        -- Handle respawns
+        characterConn = player.CharacterAdded:Connect(function(character)
+            character:WaitForChild("HumanoidRootPart")
+            setCFrame(character)
+        end)
+    end
+}
 
 
 
@@ -2982,6 +3170,13 @@ end
 --  these are pets. its only used to detect if we found and rare pet.
 
 Varz.rare_pets = {
+
+    ["Marshmallow Lamb"] = true,
+    ["Easter Bunny"] = true,
+    ["Gilded Choc Easter Egg Chick"] = true,
+    ["Gilded Choc Marshmallow Lamb"] = true,
+    ["Gilded Choc Easter Bunny"] = true,
+    ["Gilded Choc Chocolate Bunny"] = true,
 
     ["Birb"] = true,
     ["Rainbow Brown Owl"] = true,
@@ -4641,6 +4836,7 @@ MoneyMarkets.UI = {
 MoneyMarkets.Products = {}
 
 -- #market
+_S.GiftController = require(game:GetService("ReplicatedStorage").Modules.GiftController)
 MoneyMarkets.Market = {
     products = {},
 
@@ -4667,6 +4863,27 @@ MoneyMarkets.Market = {
         Library:Notify("Buying.. Make sure to use right executors ")
         --_S.MarketplaceService:SignalPromptProductPurchaseFinished(_S.LocalPlayer.UserId, product_id, true)
         _S.MarketplaceService:PromptProductPurchase(_S.LocalPlayer, product_id)
+    end,
+
+    GiftSelected = function()
+        if MoneyMarkets.CurrentSelectedProductId == 0 or MoneyMarkets.CurrentSelectedProductId == "" then
+            Library:Notify("Invalid id: " .. MoneyMarkets.CurrentSelectedProductId)
+            return
+        end
+        local product_id = MoneyMarkets.Market.products[MoneyMarkets.CurrentSelectedProductId]
+        if not product_id then
+            Library:Notify("Select id not valid ")
+            return
+        end
+        warn("Gift: " .. tostring(product_id))
+        Library:Notify("Process via pop up. if not shown means this can't be sent as gift.")
+        local idx = tonumber(product_id) or 0
+
+        -- Try GiftId first
+        _S.GiftController:PromptGiftFromGiftId(idx)
+
+        -- Try NormalId
+        _S.GiftController:PromptGiftFromNormalId(idx)
     end,
 
     BuySelectedToken = function()
@@ -5648,6 +5865,24 @@ InventoryManager.HasMutationFruit = function(mut_list, _tool)
 
     return false
 end
+
+InventoryManager.GetFruitCountUsingMutation = function(_mut)
+    local count = 0
+
+    for _, fruit in ipairs(_S.Backpack:GetChildren()) do
+        if InventoryManager.IsFruit(fruit) then
+            for mutationName, val in pairs(_mut) do
+                if fruit:GetAttribute(mutationName) ~= nil then
+                    count = count + 1
+                    break
+                end
+            end
+        end
+    end
+
+    return count
+end
+
 
 InventoryManager.GetFruitUsingMutation = function(_mut)
     local hasMut = function(_tool)
@@ -7492,7 +7727,7 @@ _FruitCollectorMachine.PlantSeed = function(position, seedName)
 end
 
 
-_FruitCollectorMachine.PlaceSeedSmart = function(_seedName, _amount)
+_FruitCollectorMachine.PlaceSeedSmart = function(_seedName, _amount, position)
     local seed_tool = InventoryManager.GetSeedUsingName(_seedName)
     if not seed_tool then
         --print("Don't have seed: " .. tostring(_seedName))
@@ -7507,6 +7742,10 @@ _FruitCollectorMachine.PlaceSeedSmart = function(_seedName, _amount)
     local availablePositions = getGridSeedPositions(center)
 
     local placePos = availablePositions[math.random(1, #availablePositions)]
+
+    if position then
+        placePos = position
+    end
     -- teleport
     local hrp = _S.Character:WaitForChild("HumanoidRootPart")
     -- Save the current CFrame
@@ -8401,7 +8640,7 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNa
                 continue
             end
 
-            -- **KEY CHANGE**: Store the fruit object AND its plant name for sorting
+            --   Store the fruit object AND its plant name for sorting
             table.insert(allValidFruits, { FruitObject = fruit, PlantName = plantName })
         end
     end
@@ -12064,6 +12303,12 @@ PetMutation.mut = {
                 end
             end
 
+            if bypassmut and is_weight_mode then
+                if meets_weight_req then
+                    is_eligible = true
+                end
+            end
+
             -- 3. Process eligibility
             if is_eligible then
                 -- This pet is eligible to be leveled; add it to the list
@@ -15155,7 +15400,7 @@ local function CheckAnyEggsToHatch()
     end
 end
 
-
+-- #hook #webhook #hatch
 _Helper.HatchReportWebhook = function(_config)
     -- local wb_data = {
     --     pets = final_hatch_result,
@@ -15215,7 +15460,7 @@ _Helper.HatchReportWebhook = function(_config)
             _icon = fav_icon
         end
         if petAge > 1 then
-            continue
+            -- continue
         end
 
         local mut_display = ""
@@ -15375,7 +15620,7 @@ _Helper.HatchReportWebhook = function(_config)
         local petAge = pet_data.level
 
         if petAge > 1 then
-            continue
+            --continue
         end
 
         if petName and petWeight then
@@ -16532,8 +16777,426 @@ EventsManager.FeedEvent = {
 }
 
 
+-- #event
+
+
+-- preload
+
+-- Varz.PreloadEvents = function()
+--     local UpdateService = game:GetService("ReplicatedStorage")
+--         :WaitForChild("Modules")
+--         :WaitForChild("UpdateService")
+
+--     local Interaction = workspace:WaitForChild("Interaction")
+
+--     for _, obj in ipairs(UpdateService:GetChildren()) do
+--         obj.Parent = Interaction
+--     end
+-- end
+
+-- Varz.PreloadEvents()
+
 
 --- ============= Crafing event #craft #event #smith
+-- Load the Easter module
+
+
+EventsManager.EasterEvent = {
+
+    NpcEaster = nil,
+    ModeSwitching = 0,
+    PlacedSprinklers = {},
+
+    IsEasterGarden = function()
+        local currentSlot = _S.LocalPlayer:GetAttribute("CurrentSlot") or ""
+        if currentSlot ~= "Easter 2026" then
+            return false
+        end
+        return true
+    end,
+
+    GetEasterSeedPlacementPoint = function()
+        -- 1. Define your base point and how far to the right you want to go
+
+        local centerPoint = FarmManager.mFarm.Center_Point
+        local offsetDistance = 10 -- Distance in studs to the right. Change this number as needed!
+
+        -- Calculate the local right offset, then extract just the Vector3 position
+        local rightPosition = (centerPoint.CFrame * CFrame.new(offsetDistance, 0, 0)).Position
+        return rightPosition
+
+        -- -- 2. Create the visual block
+        -- local visualBlock = Instance.new("Part")
+        -- visualBlock.Name = "RightSideVisualizer"
+        -- visualBlock.Size = Vector3.new(2, 2, 2)       -- Size of the red block
+        -- visualBlock.Color = Color3.fromRGB(255, 0, 0) -- Makes it red
+        -- visualBlock.Material = Enum.Material.Neon     -- Makes it glow so it's easy to spot
+        -- visualBlock.Anchored = true
+        -- visualBlock.CanCollide = false
+
+        -- -- 3. Calculate the new position
+        -- -- In CFrame, the X axis is left/right. Positive X goes to the right.
+        -- -- Multiplying the base CFrame by CFrame.new(X, 0, 0) moves it locally to the right.
+        -- visualBlock.CFrame = centerPoint.CFrame * CFrame.new(offsetDistance, 0, 0)
+
+        -- -- 4. Place it in the workspace so you can see it
+        -- visualBlock.Parent = workspace
+
+        -- print("Red visual block spawned at the right side of the Center_Point!")
+    end,
+
+    SellAllEaster = function()
+        if not FOtherSettings.is_autosell_event then return end
+        game:GetService("ReplicatedStorage").GameEvents.EasterEvent.EasterSellInventoryRE:FireServer()
+    end,
+
+    SelectStartHuntUi = function(option)
+        local playerui = _S.PlayerGui
+        for index, item in ipairs(playerui:GetChildren()) do
+            if item.Name == "Billboard_UI" then
+                local objects = item:FindFirstChild("Objects")
+                if not objects then
+                    continue
+                end
+
+                for _, listitem in ipairs(objects:GetChildren()) do
+                    if listitem.Name ~= "Option_UI" then
+                        continue
+                    end
+
+                    if not listitem:IsA("Frame") then
+                        continue
+                    end
+
+                    local TextLabel = listitem:FindFirstChild("TextLabel", true)
+                    local ImageButton = listitem:FindFirstChild("ImageButton", true)
+
+                    if not TextLabel or not ImageButton then
+                        continue
+                    end
+                    local txtx = TextLabel.Text
+                    if txtx ~= option then
+                        continue
+                    end
+
+                    --print("Found option ", txtx)
+
+                    GameDataManager.Clicker.ClickButton(ImageButton)
+                end
+            end
+        end
+    end,
+
+    HasEventEaster = function()
+        local eventx = FallEventManager.findInWorkspaceOrInteraction("Easter2026", "Model")
+        if eventx then return true end
+        return false
+    end,
+
+    GetNPC = function()
+        local npc = FallEventManager.findInWorkspaceOrInteraction("EasterEggHuntNPC", "Model")
+        return npc
+    end,
+
+    StartEggHunt = function()
+        task.spawn(function()
+            local rs = game:GetService("ReplicatedStorage")
+
+            -- Cache once
+            local gameEvents = rs:FindFirstChild("GameEvents")
+            local easter = gameEvents and gameEvents:FindFirstChild("Easter2026")
+            local remote = easter and easter:FindFirstChild("EasterEventStartEggHunt")
+
+            if not remote or not remote:IsA("RemoteFunction") then
+                return warn("RemoteFunction not found or invalid")
+            end
+
+            -- Loop
+            while true do
+                task.wait(10)
+
+                if not FOtherSettings.is_auto_egghunt then
+                    task.wait()
+                    continue
+                end
+
+                local currentCooldown = tonumber(_S.LocalPlayer:GetAttribute("EasterEggHuntCooldownRemaining")) or 0
+
+                if currentCooldown <= 0 then
+                    -- game:GetService("ReplicatedStorage").GameEvents.Easter2026.EasterEventStartEggHunt:InvokeServer()
+                    if not EventsManager.EasterEvent.NpcEaster then
+                        EventsManager.EasterEvent.NpcEaster = EventsManager.EasterEvent.GetNPC()
+                    end
+                    local npc_x = EventsManager.EasterEvent.NpcEaster
+
+                    if npc_x and npc_x:FindFirstChild("RootPart") then
+                        local root = npc_x.RootPart
+
+                        -- 3. Safely grab the first ProximityPrompt
+                        local firstPrompt = root:FindFirstChildOfClass("ProximityPrompt")
+
+                        if firstPrompt then
+                            -- print("Success! Target found: " .. firstPrompt.Name)
+                            -- Your logic here
+                            GameDataManager.Teleport.TeleportTo(npc_x, true)
+                            task.wait(2)
+                            GameDataManager.ProximityPrompt.ActivateProximityPrompt(firstPrompt)
+                            task.wait(2)
+
+                            local option = "#1"
+                            EventsManager.EasterEvent.SelectStartHuntUi(option)
+                            task.wait(2)
+                        end
+                    else
+                        -- print("NPC path was invalid. No crash occurred.")
+                    end
+
+
+                    -- print("Started hunt")
+                    -- task.wait(10)
+                end
+
+
+                -- -- if txt == "Egg Hunt is READY TO START" then
+                -- local success, response = pcall(function()
+                --     return remote:InvokeServer()
+                -- end)
+
+                -- if success then
+                --     print("Server response:", response)
+                -- else
+                --     warn("Invoke failed:", response)
+                -- end
+                -- end
+            end
+        end)
+    end,
+
+    CollectFruitsEaster = function()
+        if not EventsManager.EasterEvent.IsEasterGarden() then
+            return
+        end
+
+        if not FOtherSettings.is_fall_event_running then return end
+
+        local list_names = {}
+
+        local valid_mutations = {
+            ["Goldsparkle"] = true,
+        }
+
+        local configx = {
+            amount = 25,
+            batch_mode = true,
+            random = true,
+            whitelist_mutation = {},
+        }
+
+
+
+        local fast_mode = FOtherSettings.is_fall_event_fastmode
+
+        if fast_mode then
+            while true do
+                task.wait(0.5)
+                if not FOtherSettings.is_fall_event_running then break end
+
+                if not fast_mode then
+                    break
+                end
+
+                -- Pause
+                if Varz.IsPaused() then
+                    break
+                end
+
+                if EventsManager.EasterEvent.ModeSwitching > 0 then
+                    configx.whitelist_mutation = valid_mutations
+                    EventsManager.EasterEvent.ModeSwitching = 0
+                else
+                    configx.whitelist_mutation = {}
+                    EventsManager.EasterEvent.ModeSwitching = 1
+                end
+
+                local _c = _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig(list_names,
+                    configx)
+
+                task.wait(0.2)
+
+                if not _c then
+                    break
+                end
+                EventsManager.EasterEvent.SellAllEaster()
+
+                if Varz.IS_HATCHING or Varz.backpack_full then
+                    break
+                end
+            end
+
+            task.wait(0.1)
+        else
+            while true do
+                task.wait(0.5)
+                if not FOtherSettings.is_fall_event_running then break end
+                if Varz.IS_HATCHING or Varz.backpack_full then
+                    break
+                end
+                if fast_mode then
+                    break
+                end
+
+                -- Pause
+                if Varz.IsPaused() then
+                    break
+                end
+
+                if EventsManager.EasterEvent.ModeSwitching > 0 then
+                    configx.whitelist_mutation = valid_mutations
+                    EventsManager.EasterEvent.ModeSwitching = 0
+                else
+                    configx.whitelist_mutation = {}
+                    EventsManager.EasterEvent.ModeSwitching = 1
+                end
+
+                configx.amount = 19
+                configx.batch_mode = false
+                local _c = _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig(collectfruits,
+                    configx)
+
+                EventsManager.EasterEvent.SellAllEaster()
+            end
+
+
+            task.wait(0.1)
+        end
+    end,
+
+    PlacePlantsEaster = function()
+        if not EventsManager.EasterEvent.IsEasterGarden() then
+            return
+        end
+
+        if not FOtherSettings.is_auto_plantseedEvent then
+            return
+        end
+
+
+        local easterPlants = {
+            -- ["Chocolate Carrot"] = true,
+            -- ["Candy Sunflower"] = true,
+            --  ["Easter Egg"] = true,
+            --  ["Candy Blossom"] = true,
+            --  ["Candy Carrot"] = true,
+            --   ["Chocolate Berry"] = true,
+            --   ["Gumball"] = true,
+            --   ["Sugar Melon"] = true,
+            --  ["Liquorice"] = true,
+            --   ["Gummy Cactus"] = true,
+            --    ["Sour Lemon"] = true,
+            --   ["Eggfruit"] = true,
+            --   ["Chocolate Coconut"] = true,
+            ["Easter Sprout"] = true,
+            ["Easter Candy Carrot"] = true,
+            ["Easter Chocolate Berry"] = true,
+            ["Easter Gumball"] = true,
+            ["Easter Sugar Melon"] = true,
+            ["Easter Liquorice"] = true,
+            ["Easter Gummy Cactus"] = true,
+            ["Easter Sour Lemon"] = true,
+            ["Easter Eggfruit"] = true,
+            ["Easter Chocolate Coconut"] = true,
+            ["Easter Easter Sprout"] = true,
+            -- ["Eggsnapper"] = true
+        }
+
+        local pos = EventsManager.EasterEvent.GetEasterSeedPlacementPoint()
+        Varz.IS_SEEDING = true
+
+
+        for seedname, _ in pairs(easterPlants) do
+            _FruitCollectorMachine.PlaceSeedSmart(seedname, 9, pos)
+            task.wait(0.5)
+        end
+
+        Varz.IS_SEEDING = false
+    end,
+
+    AutoSellEaster = function()
+        task.spawn(function()
+            while true do
+                task.wait(2)
+                EventsManager.EasterEvent.SellAllEaster()
+            end
+        end)
+    end,
+
+    LoopSeedEasterPlant = function()
+        task.spawn(function()
+            while true do
+                task.wait(7)
+                EventsManager.EasterEvent.PlacePlantsEaster()
+            end
+        end)
+    end,
+
+    LoopFindAndCollectEggs = function()
+        -- How often to scan the workspace (in seconds).
+        -- 0.5 seconds is fast enough for most games without causing massive lag.
+
+        task.spawn(function()
+            local is_first = true
+            while true do
+                task.wait(3)
+                if is_first then
+                    task.wait(10)
+                    is_first = false
+                end
+
+
+
+                for _, child in ipairs(workspace:GetChildren()) do
+                    -- Check if the item is named "Model"
+
+                    if not child:IsA("Model") then
+                        continue
+                    end
+
+                    if child.Name == "Model" then
+                        -- Recursively search for the ProximityPrompt inside the Model
+                        local prompt = child:FindFirstChildWhichIsA("ProximityPrompt", true)
+
+                        if prompt then
+                            if prompt.ActionText == "Collect" then
+                                -- Fire the prompt if your executor supports it
+                                GameDataManager.Teleport.TeleportTo(child, true)
+                                task.wait(2)
+                                GameDataManager.ProximityPrompt.ActivateProximityPrompt(prompt)
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+}
+
+EventsManager.EasterEvent.StartEggHunt()
+EventsManager.EasterEvent.LoopFindAndCollectEggs()
+EventsManager.EasterEvent.LoopSeedEasterPlant()
+--EventsManager.EasterEvent.AutoSellEaster()
+--EventsManager.EasterEvent.GetEasterSeedPlacementPoint()
+
+task.spawn(function()
+    while true do
+        task.wait(2)
+
+        if not FarmManager.IsDataFullyLoaded() or not FarmManager.IsFarmFullyLoaded() then
+            task.wait(5)
+            continue
+        end
+        EventsManager.EasterEvent.CollectFruitsEaster()
+    end
+end)
 
 -- #tradeevent
 EventsManager.TraderEvent = {
@@ -16755,162 +17418,6 @@ EventsManager.Furnace = {
 }
 
 -- End craft event
-
-
-
--- #alien
-EventsManager.AlienEvent = {
-
-    UpdateUi = function(_txt)
-        if Varz.lbl_alien_stats then
-            Varz.lbl_alien_stats:SetText(_txt)
-        end
-    end,
-
-    SubmitPets = function()
-        local total_pets = EventsManager.AlienEvent.GetTotalPetsWithMutation()
-
-        if total_pets < 10 then
-            -- print("Pets not 10: ", total_pets)
-            return
-        end
-
-        if not FOtherSettings.alienevent.autosubmit then
-            return
-        end
-
-        pcall(function()
-            game:GetService("ReplicatedStorage").GameEvents.AlienEvent.GiveAlienatedPets:InvokeServer()
-        end)
-
-
-        -- Submit
-    end,
-    GetTotalPetsWithMutation = function()
-        local pets_snapshot = GameDataManager.Inventory.GetPetInventory()
-
-        local valid_mutations = {
-            ["Alienated"] = true
-        }
-
-
-        local count = 0
-
-        for uuid, pet_data in pairs(pets_snapshot) do
-            if pet_data then
-                local _lvl = pet_data.PetData.Level
-                local basekg = pet_data.PetData.BaseWeight
-                local pname = pet_data.PetType
-
-                local MutationType = pet_data.PetData.MutationType or ""
-                local IsFavorite = pet_data.PetData.IsFavorite
-                -- like k = IronSkin, c = Rainbow etc
-                local CurrentMutationOnPet = MutationMachineManager.AllMutationListEnum[MutationType]
-                if CurrentMutationOnPet then
-                    if valid_mutations[CurrentMutationOnPet] then
-                        count = count + 1
-                    end
-                end
-            end
-        end
-
-        return count
-    end,
-    GetPetsWithoutMutation = function()
-        -- find pets without mutations
-        local pets_snapshot = GameDataManager.Inventory.GetPetInventory()
-
-        local avoid_list = FOtherSettings.alienevent.avoid_pets or {}
-
-        local ls = {}
-
-        for uuid, pet_data in pairs(pets_snapshot) do
-            if pet_data then
-                local _lvl = pet_data.PetData.Level
-                local basekg = pet_data.PetData.BaseWeight
-
-                if basekg > 3 then
-                    continue
-                end
-
-
-                if _lvl > 99 then
-                    continue
-                end
-
-                local pname = pet_data.PetType
-
-                if avoid_list[pname] then
-                    continue
-                end
-
-                local MutationType = pet_data.PetData.MutationType or ""
-                local IsFavorite = pet_data.PetData.IsFavorite
-                -- like k = IronSkin, c = Rainbow etc
-                local CurrentMutationOnPet = MutationMachineManager.AllMutationListEnum[MutationType]
-                if CurrentMutationOnPet then
-                    continue
-                end
-
-                table.insert(ls, uuid)
-            end
-        end
-
-        return ls
-    end,
-    CheckFarmValidMutationReached = function()
-        local activepets      = FarmManager.GetActivePetsUUIDS()
-        local valid_mutations = {
-            ["Alienated"] = true
-        }
-        for index, uuid in ipairs(activepets) do
-            local pet_data = GetPetDataByUUID(uuid)
-            if pet_data then
-                local _lvl = pet_data.PetData.Level
-                local basekg = pet_data.PetData.BaseWeight
-
-                local pname = pet_data.PetType
-                local MutationType = pet_data.PetData.MutationType or ""
-                local IsFavorite = pet_data.PetData.IsFavorite
-                -- like k = IronSkin, c = Rainbow etc
-                local CurrentMutationOnPet = MutationMachineManager.AllMutationListEnum[MutationType]
-                if CurrentMutationOnPet then
-                    -- remove any pets with mutations
-                    if valid_mutations[CurrentMutationOnPet] then
-                        pcall(function()
-                            _Helper.UnEquipPet(uuid)
-                        end)
-                    end
-                end
-            end
-        end
-    end,
-    PlacePetsOnFarm = function()
-        EventsManager.AlienEvent.CheckFarmValidMutationReached()
-        task.wait(1)
-        local max_pets = GetMaxPetCapacity()
-        local activepets = FarmManager.GetActivePetsUUIDS()
-
-        if #activepets >= max_pets then
-            --print("Max pets already on the farm")
-            return
-        end
-
-        local validpets = EventsManager.AlienEvent.GetPetsWithoutMutation()
-
-        for index, uuid in ipairs(validpets) do
-            pcall(function()
-                _Helper.EquipPet(uuid)
-            end)
-            task.wait(0.2)
-            local activepetsx = FarmManager.GetActivePetsUUIDS()
-            if #activepetsx >= max_pets then
-                break
-            end
-        end
-    end
-}
-
 
 
 ---- Jungle Event
@@ -21531,7 +22038,7 @@ _Helper.FavoritePetsNewFaster = function(_keypair_array)
 
         local pet_level = Level
         local basekg = BaseWeight
-        local petWeight = GetRealPetWeight(basekg, pet_level)
+        local petWeight = GetRealPetWeight(basekg, 1)
         local petName = PetType
 
         local petToSell = db_sell[petName] or false --isPetMarkedForSale(petName)
@@ -21579,6 +22086,7 @@ _Helper.FavoritePetsNewFaster = function(_keypair_array)
     return true
 end
 
+-- sell all fav
 _Helper.FavoritePetsNew = function(_keypair_array)
     --print("Starting Favourite Process...")
     UPDATE_LABELS_FUNC.UpdateSetLblStats("♻️ Starting Favourite Process...")
@@ -21659,10 +22167,13 @@ _Helper.FavoritePetsNew = function(_keypair_array)
 
         local pet_level = Level
         local basekg = BaseWeight
-        local petWeight = GetRealPetWeight(basekg, pet_level)
+        local petWeight = GetRealPetWeight(basekg, 1)
         local petName = PetType
 
-        local petToSell = db_sell[petName] or false --isPetMarkedForSale(petName)
+        local petToSell = db_sell[petName] --isPetMarkedForSale(petName)
+        if not petToSell then
+            petToSell = false
+        end
 
         local requires_fav = false
 
@@ -32295,7 +32806,7 @@ Varz.PetTeamsUi()
 -- End of Pets Team ==========================================================================
 
 
--- Egg Priority
+-- Egg Priority ##eggui
 local function MEggUi()
     -- Create the new "Eggs" Tab
     local max_order = 100
@@ -32308,6 +32819,20 @@ local function MEggUi()
     -- Create a groupbox to hold the egg settings
     local GroupBoxEggs = UIEggTab:AddLeftGroupbox("Egg Priority & Settings", "list-ordered")
     local eggSettingsGroup = UIEggTab:AddRightGroupbox("Egg Options", "egg")
+
+    local eggActions = UIEggTab:AddRightGroupbox("Egg Actions", "egg")
+
+
+    if eggActions then
+        eggActions:AddButton({
+            Text = "Hatch All",
+            Tooltip = "Hatches all eggs on the farm, if they are ready",
+            Func = function()
+                HatchAllEggsAvailable(false)
+            end,
+        })
+    end
+
 
     ---====== Egg settings
     eggSettingsGroup:AddLabel({
@@ -33203,13 +33728,39 @@ local function M_UI_PLANTS()
         })
 
 
+        local dp_placedsprinklers = SprinklerGroup:AddDropdown("dp_placedsprinklers", {
+            Values = {},
+            Default = {},
+            Multi = true,
+            Searchable = true,
+            MaxVisibleDropdownItems = 10,
+            Text = "🟢 Place Sprinklers",
+            Tooltip = "Select sprinklers to place. only 1 sprinkler will be placed of each selected type",
+            Changed = function(newSelection)
+                if not newSelection then
+                    return
+                end
+                FOtherSettings.autoplacesprinklers = {}
+                for key, value in pairs(newSelection) do
+                    FOtherSettings.autoplacesprinklers[key] = value
+                end
+
+                SaveDataOther()
+            end
+        })
+        dp_placedsprinklers:SetValues(InventoryManager.Gear.GetAllSprinklers())
+        dp_placedsprinklers:SetValue(FOtherSettings.autoplacesprinklers);
+
+
+
+
         local dropdowndeleteSprinklers = SprinklerGroup:AddDropdown("dropdowndeleteSprinklers", {
             Values = {},
             Default = {},
             Multi = true,
             Searchable = true,
             MaxVisibleDropdownItems = 10,
-            Text = "🔪 Delete Sprinklers",
+            Text = "❌ Delete Sprinklers",
             Tooltip = "Select sprinklers to delete when they are placed.",
             Changed = function(newSelection)
                 if not newSelection then
@@ -33234,6 +33785,24 @@ local function M_UI_PLANTS()
             Callback = function(Value)
                 FSettings.auto_remove_sprinklers = Value
                 SaveData()
+            end
+        })
+
+        SprinklerGroup:AddDivider()
+
+        SprinklerGroup:AddLabel({
+            Text =
+            "💡 Places one sprinkler of each type per session, use it with auto delete to keep it unlimited effect for current session. Places in the center right side of the farm.",
+            DoesWrap = true
+        })
+
+        SprinklerGroup:AddToggle("placesprinkersauto", {
+            Text = "📌 Enable Auto Place",
+            Default = FOtherSettings.enable_autoplacesprinklers,
+            Tooltip = "Automatically places sprinklers",
+            Callback = function(Value)
+                FOtherSettings.enable_autoplacesprinklers = Value
+                SaveDataOther()
             end
         })
     end
@@ -33960,12 +34529,12 @@ local function MEventsUi()
         Icon = "calendar-heart"
     })
 
-    local type_fruit_event_name = "Christmas Event 🎅" -- 🥬 <font color='#ff00ff'>Fall Market Event</font> 🥕
+    local type_fruit_event_name = "Easter Event 🌸" -- 🥬 <font color='#ff00ff'>Fall Market Event</font> 🥕
 
     -- Groups
     --local eventJungle = UIEventsTab:AddLeftGroupbox("🌴 <font color='#228B22'>Jungle Event</font> 🍂", "tree")
 
-    local gFeedEvent = UIEventsTab:AddLeftGroupbox("👽 Alienated", "tasks")
+    local gFeedEvent = UIEventsTab:AddLeftGroupbox("🌈 Rainbow Event", "tasks")
 
     local gFallEvent = UIEventsTab:AddLeftGroupbox(type_fruit_event_name, "snowflake")
     local gQuest = UIEventsTab:AddLeftGroupbox("🍂 <font color='#FFD700'>Quests</font> 🌽", "tasks")
@@ -33984,57 +34553,57 @@ local function MEventsUi()
     --local gTradeEvent = UIEventsTab:AddLeftGroupbox("💰 Trade Event", "store")
 
 
-    -- #alienated
+    -- #Rainbow
     if gFeedEvent then
         gFeedEvent:AddLabel({
             Text =
-            "💡 Automatically places and removes pets that have got alienated mutation. Avoids big and pets level 99+",
+            "💡 Automatically collects pots and required fruits",
             DoesWrap = true
         })
 
-        Varz.lbl_alien_stats = gFeedEvent:AddLabel({
-            Text =
-            "-",
-            DoesWrap = true
-        })
+        -- Varz.lbl_alien_stats = gFeedEvent:AddLabel({
+        --     Text =
+        --     "-",
+        --     DoesWrap = true
+        -- })
 
 
-        local exludealienated = gFeedEvent:AddDropdown("gAlinatedAvoid", {
-            Values = {},
-            Default = {},
-            Multi = true,
-            Text = "🤖 Exclude Pets",
-            Searchable = true,
-            MaxVisibleDropdownItems = 10,
-            Tooltip = "Select pets to avoid placing on the farm.",
-            Changed = function(newSelection)
-                FOtherSettings.alienevent.avoid_pets = newSelection
-                SaveDataOther()
-            end
-        })
+        -- local exludealienated = gFeedEvent:AddDropdown("gAlinatedAvoid", {
+        --     Values = {},
+        --     Default = {},
+        --     Multi = true,
+        --     Text = "🤖 Exclude Pets",
+        --     Searchable = true,
+        --     MaxVisibleDropdownItems = 10,
+        --     Tooltip = "Select pets to avoid placing on the farm.",
+        --     Changed = function(newSelection)
+        --         FOtherSettings.x.avoid_pets = newSelection
+        --         SaveDataOther()
+        --     end
+        -- })
 
-        exludealienated:SetValues(Varz.all_pets_names_list)
-        exludealienated:SetValue(FOtherSettings.alienevent.avoid_pets)
+        -- exludealienated:SetValues(Varz.all_pets_names_list)
+        -- exludealienated:SetValue(FOtherSettings.x.avoid_pets)
 
-        gFeedEvent:AddDivider()
-        gFeedEvent:AddToggle("autosubmitaliened", {
-            Text = "⭐ Auto Submit",
-            Default = FOtherSettings.alienevent.autosubmit,
-            Tooltip = "Auto submits when you have 10 pets with alienated mutation.",
-            Callback = function(Value)
-                FOtherSettings.alienevent.autosubmit = Value
-                SaveDataOther()
-            end
-        })
+        -- gFeedEvent:AddDivider()
+        -- gFeedEvent:AddToggle("autosubmitaliened", {
+        --     Text = "⭐ Auto Submit",
+        --     Default = FOtherSettings.x.autosubmit,
+        --     Tooltip = "Auto submits when you have 10 pets with alienated mutation.",
+        --     Callback = function(Value)
+        --         FOtherSettings.x.autosubmit = Value
+        --         SaveDataOther()
+        --     end
+        -- })
 
         -- Auto collect fruit toggle
         gFeedEvent:AddDivider()
-        gFeedEvent:AddToggle("autofeedeventenableval", {
+        gFeedEvent:AddToggle("autofeedrainbowevent", {
             Text = "⚡ Enable Event",
-            Default = FOtherSettings.alienevent.enabled,
+            Default = FOtherSettings.rainbowevent.enabled,
             Tooltip = "Enables the event",
             Callback = function(Value)
-                FOtherSettings.alienevent.enabled = Value
+                FOtherSettings.rainbowevent.enabled = Value
                 SaveDataOther()
             end
         })
@@ -34903,7 +35472,7 @@ local function MEventsUi()
     ---------------------------------------------------
     local hasShops = false
     if gFallEvent then
-        local event_name1 = "Christmas Event"
+        local event_name1 = "Easter Event"
         UI_LABELS.lbl_fallevent_stats = gFallEvent:AddLabel({
             Text = "⏳ Waiting to start with delay.",
             DoesWrap = true
@@ -34915,6 +35484,8 @@ local function MEventsUi()
             Text = "-",
             DoesWrap = true
         })
+
+
 
         -- Required fruits
         UI_LABELS.lbl_fallevent_required_fruits = gFallEvent:AddLabel({
@@ -34929,15 +35500,53 @@ local function MEventsUi()
             DoesWrap = true
         })
 
+        -- hide labels, not needed for some events
+        UI_LABELS.lbl_fallevent_progress:SetVisible(false)
+        UI_LABELS.lbl_fallevent_required_fruits:SetVisible(false)
+        UI_LABELS.lbl_fallevent_fall_bloom:SetVisible(false)
+
         -- info
         gFallEvent:AddLabel({
             Text = "ℹ️ " ..
                 event_name1 ..
-                " <font color='#FFD700'>Skips Ascension-required items. Pausing as a hatch is about to occur. </font>",
+                " <font color='#FFD700'>Easter event, auto harvest, auto plant, auto sell and more!</font>",
             DoesWrap = true
         })
-        gFallEvent:AddDivider()
+        -- gFallEvent:AddDivider()
         -- Enable or disable Fall market event
+
+        gFallEvent:AddToggle("autoplantseedsevent", {
+            Text = "🍀 <font color='#00DB73'>Auto Plant Seeds</font>",
+            Default = FOtherSettings.is_auto_plantseedEvent,
+            Tooltip = "If enabled auto plants easter seeds. Will only work if you have easter garden active",
+            Callback = function(Value)
+                FOtherSettings.is_auto_plantseedEvent = Value
+                SaveDataOther()
+            end
+        })
+
+        gFallEvent:AddToggle("autoselleventxz", {
+            Text = "💰 <font color='#00DB73'>Auto Sell</font>",
+            Default = FOtherSettings.is_autosell_event,
+            Tooltip = "If enabled auto sells to easter shop.",
+            Callback = function(Value)
+                FOtherSettings.is_autosell_event = Value
+                SaveDataOther()
+            end
+        })
+
+
+        gFallEvent:AddToggle("hunthuntauto", {
+            Text = "✨ <font color='#E60086'>Auto Egg Hunt</font>",
+            Default = FOtherSettings.is_auto_egghunt,
+            Tooltip = "If enabled auto hunts eggs",
+            Callback = function(Value)
+                FOtherSettings.is_auto_egghunt = Value
+                SaveDataOther()
+            end
+        })
+
+
 
         gFallEvent:AddToggle("fastcollect", {
             Text = "✨ <font color='#E60086'>Fast Collect</font>",
@@ -34949,16 +35558,16 @@ local function MEventsUi()
             end
         })
 
-        gFallEvent:AddDivider()
-        gFallEvent:AddToggle("nyDailyEvent", {
-            Text = "🔄 New Year DailyEvent",
-            Default = FOtherSettings.newyear_dailyclaim,
-            Tooltip = "If enabled auto claims new year event.",
-            Callback = function(Value)
-                FOtherSettings.newyear_dailyclaim = Value
-                SaveDataOther()
-            end
-        })
+        -- gFallEvent:AddDivider()
+        -- gFallEvent:AddToggle("nyDailyEvent", {
+        --     Text = "🔄 New Year DailyEvent",
+        --     Default = FOtherSettings.newyear_dailyclaim,
+        --     Tooltip = "If enabled auto claims new year event.",
+        --     Callback = function(Value)
+        --         FOtherSettings.newyear_dailyclaim = Value
+        --         SaveDataOther()
+        --     end
+        -- })
 
         gFallEvent:AddDivider()
         gFallEvent:AddToggle("tEventFall", {
@@ -37566,6 +38175,21 @@ function MShopUi()
                 end
             })
 
+
+            -- Gift
+            local giftselected = GroupBoxMarket:AddButton({
+                Text = "🎁 Gift Selected",
+                Tooltip = "Only works on some products.",
+                Func = function()
+                    if next(MoneyMarkets.Market.products) == null then
+                        Library:Notify("Not loaded", 2)
+                        return
+                    end
+
+                    MoneyMarkets.Market.GiftSelected()
+                end
+            })
+
             -- hiddenStuuf:SetupDependencies({
             --     { Varz.UI_Toggles.ToggleUnlockStore, true },
             -- })
@@ -37860,17 +38484,17 @@ function SettingsUi()
     -- })
 
 
-    GroupBoxOtherSettings:AddToggle("disable_event_notify_button", {
+    GroupBoxOtherSettings:AddToggle("potmodeis_highperformance_mode", {
         Text = "🔫 Potato Mode",
         Default = FSessionDx.is_highperformance_mode,
         Tooltip = "Disables logs and other effcts",
         Callback = function(Value)
-            FSessionDx.is_highperformance_moden = Value
+            FSessionDx.is_highperformance_mode = Value
             if Value then
                 _Helper.ActivateFlatMode()
             end
             _Helper.NotifyButton()
-            SaveData()
+            SaveManager.SaveSessionSettings.SaveFile()
         end
     })
 
@@ -38137,7 +38761,7 @@ if not _G.FallEventLoop then
                 continue
             end
             FallEventManager.havesubmittedforhatch = false
-            if not FallEventManager.EventFolderExists() then
+            if not EventsManager.EasterEvent.HasEventEaster() then
                 FallEventManager.UpdateStatsText("🔴 Unable to find event...")
 
                 task.wait(15)
@@ -38146,6 +38770,14 @@ if not _G.FallEventLoop then
 
             local fast_mode = FOtherSettings.is_fall_event_fastmode
             FallEventManager.UpdateStatsText("🟢 Active and running...")
+
+            if EventsManager.EasterEvent.HasEventEaster() then
+                -- since easter event has its on handlers
+                task.wait(4)
+                continue
+            end
+
+
             local typeoffruits = FallEventManager.GetLookingForTrait()
             local cooldown = FallEventManager.GetCooldown()
             local _total_bloom = FallEventManager.GetFallBlooms()
@@ -38570,6 +39202,97 @@ end)
 
 
 
+-- #rainbowevent #rainbow #event
+TaskManager.RainbowEvent = {
+    FindPots = function()
+        local pots = {}
+        for _, obj in ipairs(_S.Workspace:GetChildren()) do
+            if obj.Name == "Pot" and obj:IsA("Model") then
+                table.insert(pots, obj)
+            end
+        end
+
+        return pots
+    end,
+    CollectRequiredFruits = function()
+        local valid_mutations = {
+            ["Luck"] = true,
+        }
+        local configx = {
+            amount = 20,
+            batch_mode = false,
+            whitelist_mutation = valid_mutations,
+            --blacklist_mutation = FOtherSettings.mutation_whitelist,
+            --variants = FOtherSettings.fruit_variants_select,
+            --mut_count = FOtherSettings.max_mutation_count
+        }
+        local collectfruits = {}
+        _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig(collectfruits,
+            configx)
+        task.wait(1)
+    end,
+    CollectPots = function()
+        -- we have enough, claim pots
+        local pots = TaskManager.RainbowEvent.FindPots()
+        if #pots == 0 then
+            --print("no pots")
+            return false
+        end
+
+        local mut = {
+            ["Luck"] = true
+        }
+        local count = InventoryManager.GetFruitCountUsingMutation(mut)
+        if count < 3 then
+            -- collect fruits
+            TaskManager.RainbowEvent.CollectRequiredFruits()
+            return false
+        end
+
+        for _, item in ipairs(pots) do
+            local p = GameDataManager.ProximityPrompt.FindProximityPrompt(item)
+            if p then
+                GameDataManager.Teleport.TeleportTo(item, true)
+                task.wait(3)
+                --  print("Active")
+                GameDataManager.ProximityPrompt.ActivateProximityPrompt(p)
+                task.wait(2)
+            else
+                --  print("p not found")
+            end
+
+            local count1 = InventoryManager.GetFruitCountUsingMutation(mut)
+            if count1 < 3 then
+                break
+            end
+        end
+    end,
+    EventLoop = function()
+        if not FOtherSettings.rainbowevent.enabled then
+            return false
+        end
+        TaskManager.RainbowEvent.CollectPots()
+    end
+}
+
+
+
+task.spawn(function()
+    while true do
+        task.wait(10)
+        if not FarmManager.IsDataFullyLoaded() or not FarmManager.IsFarmFullyLoaded() then
+            task.wait(5)
+            continue
+        end
+
+        if Varz.IsPaused() then
+            task.wait(math.random(2, 5))
+            continue
+        end
+
+        TaskManager.RainbowEvent.EventLoop()
+    end
+end)
 
 
 
@@ -38794,29 +39517,6 @@ task.spawn(function()
     end
 end)
 
-
--- #alien
-task.spawn(function()
-    while true do
-        task.wait(3)
-
-        if not FOtherSettings.alienevent.enabled then
-            EventsManager.AlienEvent.UpdateUi("🔴 Not enabled")
-            continue
-        end
-
-        if FSettings.is_running or MutationMachineManager.is_running or PetMutation.is_running then
-            EventsManager.AlienEvent.UpdateUi("⚠️ Unable to run if hatching or mutation systems are enabled.")
-            continue
-        end
-
-        EventsManager.AlienEvent.UpdateUi("🟢 Running")
-        task.wait(4)
-        EventsManager.AlienEvent.PlacePetsOnFarm()
-        task.wait(1)
-        EventsManager.AlienEvent.SubmitPets()
-    end
-end)
 
 
 
@@ -39325,7 +40025,55 @@ TaskManager.task_auto_shovel_sprinkler = task.spawn(function()
 end)
 
 
+task.spawn(function()
+    while true do
+        task.wait(2)
 
+        if not FarmManager.IsDataFullyLoaded() or not FarmManager.IsFarmFullyLoaded() then
+            task.wait(10)
+            continue
+        end
+
+        if not FOtherSettings.enable_autoplacesprinklers then
+            task.wait(2)
+            continue
+        end
+
+        local spx = FOtherSettings.autoplacesprinklers or {}
+
+        _Helper.JsonPrint(EventsManager.EasterEvent.PlacedSprinklers)
+
+        if next(spx) == nil then
+            continue
+        end
+        local loc = EventsManager.EasterEvent.GetEasterSeedPlacementPoint()
+        for sName, value in pairs(spx) do
+            -- we must hold and place the sprinklers
+            task.wait()
+            if EventsManager.EasterEvent.PlacedSprinklers[sName] then
+                continue
+            end
+            local tool = InventoryManager.GetSprinklerUsingName(sName)
+            if tool then
+                unequipTools()
+                EquipToolOnChar(tool)
+                InventoryManager.PlaceSprinkler(loc)
+                -- print("Place sprinkler")
+                task.wait(0.5)
+                local ob = FarmManager.GetSprinklerOnFarm(sName)
+                if ob then
+                    -- we have it
+                    EventsManager.EasterEvent.PlacedSprinklers[sName] = true
+                end
+            else
+                -- print("not found ", sName)
+            end
+        end
+        if IsSprinklerHeld() then
+            unequipTools()
+        end
+    end
+end)
 
 
 
@@ -40892,7 +41640,9 @@ if not _G.letswater_task then
 
 
 
-
+            if IsSprinklerHeld() then
+                continue
+            end
 
             if waterf then
                 unequipTools()
@@ -40926,16 +41676,25 @@ if not _G.letswater_task then
                     break
                 end
 
+                if IsSprinklerHeld() then
+                    break
+                end
+
                 WaterManager.UI.UpdateStatus("🟢 Watering in progress...")
                 WaterManager.UI.UpdateProgress("💧 Watering " .. tree.Name)
                 local water_cans_used = 0
                 for i = 1, amount, 1 do
-                    if Varz.IS_HATCHING then
+                    if Varz.IS_HATCHING or Varz.IS_SEEDING then
                         is_stop = true
                         break
                     end
 
                     if not waterf then
+                        break
+                    end
+
+
+                    if IsSprinklerHeld() then
                         break
                     end
 
@@ -42384,129 +43143,6 @@ end)
 -- #fruitesp #esp
 
 
-_Helper.CreateFruitESPx = function(object, showMutations)
-    if not object or not object:IsA("Instance") then
-        return
-    end
-
-    -- Prevent duplicate ESP
-    if object:GetAttribute("has_esp") then
-        return
-    end
-    object:SetAttribute("has_esp", true)
-
-    -- Resolve target model
-    local model = object:IsA("Model") and object or object:FindFirstAncestorOfClass("Model")
-    if not model then
-        return
-    end
-
-    local mainPart = model.PrimaryPart or model:FindFirstChild("Base")
-    if not mainPart then
-        return
-    end
-
-    -- Create the BillboardGui
-    local billboard = Instance.new("BillboardGui")
-    billboard.Name = "exof"
-    billboard.Adornee = mainPart
-    billboard.Size = UDim2.fromOffset(400, 70) -- may adjust later if mutations added
-    billboard.StudsOffset = Vector3.new(0, 3, 0)
-    billboard.AlwaysOnTop = true
-    billboard.LightInfluence = 0
-
-    -- Container for vertical layout
-    local container = Instance.new("Frame")
-    container.Size = UDim2.fromScale(1, 1)
-    container.BackgroundTransparency = 1
-    container.Parent = billboard
-
-    local layout = Instance.new("UIListLayout")
-    layout.FillDirection = Enum.FillDirection.Vertical
-    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-    layout.VerticalAlignment = Enum.VerticalAlignment.Top
-    layout.Padding = UDim.new(0, 2)
-    layout.Parent = container
-
-    -- Main info label (name + variant + weight)
-    local mainLabel = Instance.new("TextLabel")
-    mainLabel.Size = UDim2.fromScale(1, 0.6)
-    mainLabel.BackgroundTransparency = 1
-    mainLabel.TextScaled = false
-    mainLabel.TextSize = 13
-    mainLabel.RichText = true
-    mainLabel.Font = Enum.Font.GothamBold
-    mainLabel.TextStrokeTransparency = 0.4
-    mainLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
-    mainLabel.TextColor3 = Color3.fromRGB(255, 215, 90)
-
-    -- Build main display text
-    local name = model.Name
-    local name_color = _Helper.StringToColor3Light(name)
-
-    local Variant = _FruitCollectorMachine.GetFruitVariant(object)
-    local Weight = ParseWeightNumber2d(_FruitCollectorMachine.GetFruitWeight(object))
-    local color_variant = _Helper.StringToColor3Light(Variant)
-
-    local namedisplay = string.format("<font color='%s'>%s</font> - <font color='%s'>%s</font>",
-        color_variant, Variant, name_color, name)
-    local w_display = string.format("%skg", Weight)
-
-    local CalculatePlantValue = require(game:GetService("ReplicatedStorage").Modules.CalculatePlantValue)
-
-    -- Get the value
-    local value = _S.CalculatePlantValue(object) or 0
-    local cashx = "$" .. _Helper.formatShecklesNumber(value)
-
-    mainLabel.Text = string.format(
-        "<stroke color='#000000' thickness='2'><font color='#000000'>%s</font> <font color='#FFFFFF'>%s</font></stroke> • <stroke color='#000000' thickness='2'><font color='#00F51E'>%s</font></stroke> ",
-        namedisplay, w_display, cashx
-    )
-    mainLabel.Parent = container
-
-    -- Optional mutations label
-    if showMutations then
-        local all_attr = object:GetAttributes()
-        local tbl_mut = {}
-
-
-        for key, value in pairs(all_attr) do
-            if Varz.AllFruitMutations[key] then
-                local txtm = string.format("<font color='%s'>%s</font>", _Helper.StringToColor3Light(key), key)
-                table.insert(tbl_mut, txtm)
-            end
-        end
-
-        if #tbl_mut > 0 then
-            local total_mut                 = #tbl_mut
-            local dot                       = " • "
-            local mt_ls                     = table.concat(tbl_mut, dot)
-            local mdisplay                  = string.format(
-                "[%s] <stroke color='#000000' thickness='1'><font color='#FFFFFF'>%s</font></stroke>", total_mut, mt_ls)
-            local mutLabel                  = Instance.new("TextLabel")
-            mutLabel.Size                   = UDim2.fromScale(1, 0.4)
-            mutLabel.BackgroundTransparency = 1
-            mutLabel.TextScaled             = false
-            mutLabel.TextSize               = 11
-            mutLabel.RichText               = true
-            mutLabel.TextWrapped            = true
-            mutLabel.Font                   = Enum.Font.GothamBold
-            mutLabel.TextStrokeTransparency = 0.6
-            mutLabel.TextStrokeColor3       = Color3.new(0, 0, 0)
-            mutLabel.TextColor3             = Color3.fromRGB(255, 230, 160)
-
-            mutLabel.Text                   = mdisplay
-            mutLabel.Parent                 = container
-
-            -- Increase BillboardGui height if mutations exist
-            billboard.Size                  = UDim2.fromOffset(300, 90)
-        end
-    end
-
-    billboard.Parent = model
-end
-
-
 _Helper.CreateFruitESP = function(object, showMutations, forceRefresh)
     if not object or not object:IsA("Instance") then return end
 
@@ -42769,7 +43405,7 @@ _Helper.DisabledLog = function()
     local LogService = game:GetService("LogService")
     local ScriptContext = game:GetService("ScriptContext")
 
-    --print("🚫 KILLING CONSOLE OUTPUT...")
+    print("🚫 KILLING CONSOLE OUTPUT...")
     -- task.wait(3)
 
     -- 1. STOP VISUAL LOGS (The F9 Console)
@@ -42804,7 +43440,7 @@ task.spawn(function()
     while true do
         task.wait()
 
-        if FSessionDx.is_highperformance_mode then
+        if not FSessionDx.is_highperformance_mode then
             task.wait(2)
             continue
         end
