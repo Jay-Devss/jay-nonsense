@@ -131,8 +131,31 @@ _S.EventShopData                       = _S.safeRequire(_S.ReplicatedStorage.Dat
 _S.PetList                             = _S.safeRequire(_S.ReplicatedStorage.Data.PetRegistry.PetList)
 _S.PetRegistry                         = _S.safeRequire(_S.ReplicatedStorage.Data.PetRegistry)
 
-_S.PetMutationRegistry                 = _S.safeRequire(_S.ReplicatedStorage.Data.PetRegistry.PetMutationRegistry)
-_S.TravelingMerchantData               = _S.safeRequire(_S.ReplicatedStorage.Data.TravelingMerchant
+_S.GetSessionPassModule                = function()
+    local rs = _S.ReplicatedStorage
+
+    local data = rs:FindFirstChild("Data")
+    if not data then return nil end
+
+    local seasonPass = data:FindFirstChild("SeasonPass")
+    if not seasonPass then return nil end
+
+    local modulex = seasonPass:FindFirstChild("SeasonPassShopData")
+    if not modulex then return nil end
+
+    local success, result = pcall(require, modulex)
+    if success then
+        _S.SeasonPassShop = result
+        return result
+    else
+        warn("[SeasonPassShopData] require failed:", result)
+        return nil
+    end
+end
+_S.GetSessionPassModule()
+
+_S.PetMutationRegistry   = _S.safeRequire(_S.ReplicatedStorage.Data.PetRegistry.PetMutationRegistry)
+_S.TravelingMerchantData = _S.safeRequire(_S.ReplicatedStorage.Data.TravelingMerchant
     .TravelingMerchantData)
 --_S.PetsService = require(_S.ReplicatedStorage.Modules.PetServices.PetsService)
 print("Loading m4")
@@ -194,7 +217,7 @@ end
 
 -- #start
 _S.AppName = "Exotic Hub"
-_S.CurentV = "v1.38.3"
+_S.CurentV = "v1.39.6"
 
 local Varz = {}
 Varz.dev_tools = true
@@ -439,10 +462,7 @@ end
 
 -- save for mutations and others
 local FOtherSettings = {
-    rainbowevent                               = {
-        enabled = false,
 
-    },
     enhance_cooldown                           = 0.35,
     swap_enchancer                             = false,
     egg_override                               = {},
@@ -467,6 +487,7 @@ local FOtherSettings = {
         fruit_remove_enabled = false,
     },
     max_eggs_to_place                          = 0,
+    easterbunnyeggrewardcollect                = true,
     -- mutation machine
     mut_max_level_successfulpets               = false,
     mut_batch_process_enable                   = false,
@@ -539,6 +560,9 @@ local FOtherSettings = {
     is_auto_egghunt                            = false,
     is_autosell_event                          = true,
     is_auto_plantseedEvent                     = false,
+    eventangry_plant_auto                      = true,
+    autoplacechocolatesprinkler                = true,
+    autobuyeggs_event                          = true,
     autoplacesprinklers                        = {},
     enable_autoplacesprinklers                 = false,
     newyear_dailyclaim                         = false,
@@ -3945,6 +3969,33 @@ FarmManager.GetPlantCountBySeed = function(seedName)
     end
 end
 
+-- #fruit #plant
+FarmManager.GetPlantCountBySeedAndWeightMutations = function(seedName, required_weight)
+    local count = 0
+    local succ, res = pcall(function()
+        local children = FarmManager.Get_Plants_Physical_Objects()
+        for _, child in ipairs(children) do
+            if child.Name == seedName then
+                local is_valid, weight, mutations, variantsx = _FruitCollectorMachine.GetFruitMutationsVariantAndWeight(
+                    child)
+                if is_valid then
+                    if weight >= required_weight then
+                        count = count + 1
+                    end
+                end
+            end
+        end
+        return count
+    end)
+
+    if succ then
+        return res
+    else
+        warn("Failed to count plants:", res)
+        return count
+    end
+end
+
 FarmManager.GetPlantCountBySeedNamesPairs = function(plants_table)
     local keyval = {}
     local result = {}
@@ -5901,6 +5952,41 @@ InventoryManager.GetFruitUsingMutation = function(_mut)
         local fname = fruit:GetAttribute("f")
         if hasMut(fruit) then
             return fruit
+        end
+    end
+    return nil
+end
+
+InventoryManager.GetFruitUsingNameWeightAndMutation = function(_fname, min_weight, _mut)
+    local hasMut = function(_tool)
+        if next(_mut) == nil then
+            return true
+        end
+        for key, value in pairs(_mut) do
+            if _tool:GetAttribute(key) then
+                return true
+            end
+        end
+        return false
+    end
+
+    for _, fruit in ipairs(_S.Backpack:GetChildren()) do
+        if not fruit:IsA("Tool") then continue end
+        if fruit:GetAttribute("d") then continue end
+        if fruit:GetAttribute("b") ~= "j" then continue end
+        local fname = fruit:GetAttribute("f")
+
+        local cweight = 0
+        local obweight = fruit:FindFirstChild("Weight", true)
+        if obweight then
+            cweight = obweight.Value or 0
+        end
+
+
+        if hasMut(fruit) and fname == _fname then
+            if cweight >= min_weight then
+                return fruit
+            end
         end
     end
     return nil
@@ -7992,6 +8078,42 @@ _FruitCollectorMachine.GetFruitItemSeed = function(_fruit)
     return vv
 end
 
+_FruitCollectorMachine.GetFruitMutationsVariantAndWeight = function(_fruit)
+    -- If the fruit object is nil or invalid, instantly return safe default values
+    if not _fruit then
+        return false, 0, {}, {}
+    end
+
+    -- 1. Safely get the Weight, defaulting to 0 if it doesn't exist
+    local fruit_weight = 0
+    local weightObj = _fruit:FindFirstChild("Weight", true)
+
+    if weightObj then
+        fruit_weight = tonumber(weightObj.Value) or 0
+    end
+
+    -- 2. Safely get Mutations
+    local mutations = {}
+
+    for attrName, attrValue in pairs(_fruit:GetAttributes()) do
+        if type(attrValue) == "boolean" and attrValue == true then
+            mutations[attrName] = true
+        end
+    end
+
+    -- 3. Safely get Variant
+    local variantsMap = {}
+    local variantValue = _fruit:GetAttribute("Variant")
+
+    if variantValue and type(variantValue) == "string" and variantValue ~= "" then
+        variantsMap[variantValue] = true
+    else
+        variantsMap["Normal"] = true
+    end
+
+    -- Always returns: number, table, table
+    return true, fruit_weight, mutations, variantsMap
+end
 
 _FruitCollectorMachine.IsFruitReadyToCollect = function(_fruit, bypassready)
     -- Check to see if this fruit is ready for collection or is it still growing.
@@ -8008,20 +8130,20 @@ _FruitCollectorMachine.IsFruitReadyToCollect = function(_fruit, bypassready)
 
     local maxAge = _fruit:GetAttribute("MaxAge")
 
-
+    local obj_weight = _fruit:FindFirstChild("Weight", true)
 
     local success, fweight = pcall(function()
         return tonumber(_fruit.Weight.Value)
     end)
 
     local fruit_weight = 0
-    if success then
-        fruit_weight = fweight
-        --print("Weight:", fweight)
+    if obj_weight then
+        fruit_weight = obj_weight.Value or 0
     else
-        warn("Could not get weight:", weight) -- weight here is the error msg
+        warn("Could not get weight:")
         return false
     end
+
     local minWeight = tonumber(FOtherSettings.g_fruit_weight_min)
     local maxWeight = tonumber(FOtherSettings.g_fruit_weight_max)
 
@@ -8036,38 +8158,18 @@ _FruitCollectorMachine.IsFruitReadyToCollect = function(_fruit, bypassready)
         return true
     end
 
-    if maxAge then
-        maxAge = tonumber(maxAge)
-        local xsuccess, p_age = pcall(function()
-            return tonumber(_fruit.Grow.Age.Value)
-        end)
+    local xxsuccess, promptEnabled = pcall(function()
+        local prompt = _fruit:FindFirstChildWhichIsA("ProximityPrompt", true)
+        return prompt and prompt.Enabled
+    end)
 
-        if not xsuccess or not maxAge or not p_age then
-            return false
-        end
-
-        --warn("Fruit age ".. p_age .."/" .. maxAge)
-
-        if p_age < maxAge then
-            -- can't collects fruits that are growing.
-            --print("not ready")
-            return false
-        end
-
-        local xxsuccess, promptEnabled = pcall(function()
-            local prompt = _fruit:FindFirstChildWhichIsA("ProximityPrompt", true)
-            return prompt and prompt.Enabled
-        end)
-
-        if xxsuccess and promptEnabled then
-            return true
-        elseif xxsuccess and not promptEnabled then
-            return false
-        else
-            return false
-        end
+    if xxsuccess and promptEnabled then
+        return true
+    elseif xxsuccess and not promptEnabled then
+        return false
+    else
+        return false
     end
-
     -- All checks passed. you may collect this fruit.
     return true
 end
@@ -8562,6 +8664,7 @@ _FruitCollectorMachine.GetFruitObjectsSortedRarityConfig = function(config)
 end
 
 -- #fruit
+-- #collect
 _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNames, config)
     -- Collects fruits. key/val table passed in
     local _amount = config.amount or 15
@@ -8572,7 +8675,11 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNa
     local variants = config.variants or {}
     local max_mutation_number = config.mut_count or 0
     local ignore_fruit_list = config.ignore_fruit_list or {}
-    local is_random_fruits = config.random or false
+    local is_random_fruits = false
+
+    if config.random then
+        is_random_fruits = config.random
+    end
 
     -- This list will hold all fruits we find, along with their plant name for sorting
     local allValidFruits = {}
@@ -8585,6 +8692,8 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNa
     end
 
     -- 1. GATHER ALL VALID FRUITS
+    local alreadyCheckedEaster = {}
+    local skipped_count = 0
     for _, plantModel in ipairs(FarmManager.Get_Plants_Physical_Objects()) do
         if not plantModel:IsA("Model") then continue end
 
@@ -8612,6 +8721,7 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNa
         end
 
         -- Process any fruits found
+
         for _, fruit in ipairs(potentialFruits) do
             if fruit == nil then
                 continue
@@ -8620,6 +8730,30 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNa
                 continue
             end
 
+
+
+
+
+            local is_valid, weight, mutations, variantsx = _FruitCollectorMachine.GetFruitMutationsVariantAndWeight(
+                fruit)
+            if is_valid then
+                -- Check the easter event #easter
+                if not alreadyCheckedEaster[plantName] then
+                    local success1, res1 = pcall(function()
+                        return EventsManager.EasterAngryPlant.SkipPlantEaster(plantName, weight, mutations, variantsx)
+                    end)
+
+                    if not success1 then
+                        warn("Error:", res1)
+                    else
+                        if res1 == true then
+                            -- print("Required by easter angry plant! ", plantName, weight)
+                            alreadyCheckedEaster[plantName] = true
+                            continue
+                        end
+                    end
+                end
+            end
 
 
 
@@ -8641,28 +8775,48 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNa
             end
 
             --   Store the fruit object AND its plant name for sorting
-            table.insert(allValidFruits, { FruitObject = fruit, PlantName = plantName })
+            table.insert(allValidFruits, { FruitObject = fruit, PlantName = plantName, w = weight })
         end
     end
 
 
     -- 2. SORT THE LIST BY RARITY
+    -- table.sort(allValidFruits, function(entryA, entryB)
+    --     -- Get the rarity name (e.g., "Rare") using the plant name
+    --     -- Default to "Common" if not found in Varz.SeedRarity
+    --     local rarityNameA = Varz.SeedRarity[entryA.PlantName] or "Common"
+    --     local rarityNameB = Varz.SeedRarity[entryB.PlantName] or "Common"
+
+    --     -- Get the numerical weight for that rarity
+    --     -- Default to 1 (Common's weight) if not in our weights table
+    --     local weightA = SeedRarities[rarityNameA] or 1
+    --     local weightB = SeedRarities[rarityNameB] or 1
+
+    --     -- Sort from highest weight to lowest (Prismatic -> Common)
+    --     return weightA > weightB
+    -- end)
+
+
+    -- 2. SORT THE LIST BY RARITY, THEN BY FRUIT WEIGHT
     table.sort(allValidFruits, function(entryA, entryB)
         -- Get the rarity name (e.g., "Rare") using the plant name
-        -- Default to "Common" if not found in Varz.SeedRarity
         local rarityNameA = Varz.SeedRarity[entryA.PlantName] or "Common"
         local rarityNameB = Varz.SeedRarity[entryB.PlantName] or "Common"
 
-        -- Get the numerical weight for that rarity
-        -- Default to 1 (Common's weight) if not in our weights table
-        local weightA = SeedRarities[rarityNameA] or 1
-        local weightB = SeedRarities[rarityNameB] or 1
+        -- Get the numerical value for that rarity (Higher = Rarer)
+        local rarityValA = SeedRarities[rarityNameA] or 1
+        local rarityValB = SeedRarities[rarityNameB] or 1
 
-        -- Sort from highest weight to lowest (Prismatic -> Common)
-        return weightA > weightB
+        -- PRIMARY SORT: If they are the same rarity, sort by physical fruit weight
+        if rarityValA == rarityValB then
+            -- Heaviest fruit first
+            return entryA.w > entryB.w
+        end
+
+        -- SECONDARY SORT: Otherwise, sort by rarity
+        -- Rarest fruit first (Prismatic -> Common)
+        return rarityValA > rarityValB
     end)
-
-
 
 
 
@@ -8684,7 +8838,7 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNa
             -- START: MODIFIED BATCH LOGIC
             -- ==========================================================
             -- Send this batch to the server
-            local BATCH_SIZE = 25
+            local BATCH_SIZE = 5
 
             -- Loop through the entire list in steps of BATCH_SIZE
             for i = 1, #fruitsToCollect, BATCH_SIZE do
@@ -8711,7 +8865,7 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNa
                         -- submit it right away
                     end
                 end
-                task.wait(0.1)
+                task.wait()
             end
             -- ==========================================================
             -- END: MODIFIED BATCH LOGIC
@@ -8724,7 +8878,7 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNa
 
                 _S.collectEvent:FireServer({ fruitx })
                 collectedfruits = collectedfruits + 1
-                task.wait(0.2)
+                task.wait(0.1)
                 if submitFunction then
                     submitFunction()
                     -- submit it right away
@@ -8872,6 +9026,99 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarity = function(_fruitNames, _
     return false
 end
 
+_FruitCollectorMachine.CollectFruitByNameAndMutationAndWeight = function(fruitName, _amount, pweight, mutations,
+                                                                         forceCollect)
+    -- Collects fruits. key/val table passed in
+    local fruitsToCollect = {}
+    local MAX_PER_COLLECTION = _amount or 1
+
+    local _HasMut = function(fruit)
+        if next(mutations) == nil then
+            return true
+        end
+        for key, value in pairs(mutations) do
+            if fruit:GetAttribute(key) then
+                return true
+            end
+        end
+        return false
+    end
+
+    for _, plantModel in ipairs(FarmManager.Get_Plants_Physical_Objects()) do
+        if not plantModel:IsA("Model") then continue end
+        if not plantModel.Name then continue end
+        if fruitName ~= plantModel.Name then
+            continue
+        end
+
+        local potentialFruits = {}
+        local fruitsFolder    = plantModel:FindFirstChild("Fruits")
+
+        if fruitsFolder and #fruitsFolder:GetChildren() > 0 then
+            -- check if this actually has fruits inside because only multi harvest will have fruits inside.
+            for _, fruitx in ipairs(fruitsFolder:GetChildren()) do
+                table.insert(potentialFruits, fruitx)
+            end
+        else
+            table.insert(potentialFruits, plantModel)
+        end
+
+        -- Process any fruits found
+        for _, fruit in ipairs(potentialFruits) do
+            if #fruitsToCollect >= MAX_PER_COLLECTION then
+                break
+            end
+
+            if not _FruitCollectorMachine.IsFruitReadyToCollect(fruit) then
+                continue
+            end
+
+            if not forceCollect then
+                local is_valid, weight, mutations, variants = _FruitCollectorMachine.GetFruitMutationsVariantAndWeight(
+                    fruit)
+
+                local hasmut = _HasMut(fruit)
+
+                if next(mutations) == nil then
+                    hasmut = true
+                end
+
+                if weight >= pweight and hasmut then
+                    table.insert(fruitsToCollect, fruit)
+                end
+            else
+                -- only harvest if it matches no weight requirements
+
+                local is_valid, weight, mutations, variantsx = _FruitCollectorMachine.GetFruitMutationsVariantAndWeight(
+                    fruit)
+                if is_valid then
+                    -- Check the easter event #easter
+                    if EventsManager.EasterAngryPlant.SkipPlantEaster(fruit.Name, weight, mutations, variantsx) then
+                        continue
+                    end
+                end
+
+                table.insert(fruitsToCollect, fruit)
+            end
+        end
+    end
+
+    if #fruitsToCollect > 0 then
+        --warn("fruitsToCollect --- ")
+        --_S.collectEvent:FireServer(fruitsToCollect)
+        local collectedfruits = 0
+        for _, fruitx in ipairs(fruitsToCollect) do
+            _S.collectEvent:FireServer({ fruitx })
+            collectedfruits = collectedfruits + 1
+            task.wait(0.1)
+        end
+
+        if collectedfruits > 0 then
+            return true
+        end
+    end
+    return false
+end
 
 _FruitCollectorMachine.CollectFruitByNames = function(_fruitNames, _amount)
     -- Collects fruits. key/val table passed in
@@ -16800,6 +17047,306 @@ EventsManager.FeedEvent = {
 --- ============= Crafing event #craft #event #smith
 -- Load the Easter module
 
+Varz.EasterAngryPlants = {}
+
+EventsManager.EasterAngryPlant = {
+
+    AngryPlantModel          = nil,
+    e_isfirst                = true,
+
+    GetAngryPlantMode        = function()
+        EventsManager.EasterAngryPlant.AngryPlantModel = FallEventManager.findInWorkspaceOrInteraction("JimTheFlytrap",
+            "Model")
+    end,
+
+    GetCurrentRequiredPlant  = function()
+        -- Fetching the data using the specific key from your image
+        local eventData = VulnManager.GetBigDataUsingKey("EasterEventData")
+        if not eventData then return nil, nil end
+
+        -- 1. Unpack root level variables
+        -- local progression = eventData.Progression
+        -- local progressionSeedPacks = eventData.ProgressionSeedPacks
+        -- local hasBeenFed = eventData.HasBeenFed
+        -- local hasSeenPopup = eventData.HasSeenPopup
+        -- local totalEasterPlaytime = eventData.TotalEasterPlaytime
+        -- local hasSoldEasterPlant = eventData.HasSoldEasterPlant
+        -- local hasEnabledEasterGarden = eventData.HasEnabledEasterGarden
+        -- local seedPackGiverDiscovered = eventData.SeedPackGiverDiscovered
+        -- local totalTrackedPlaytime = eventData.TotalTrackedPlaytime
+        -- local hasPurchasedEasterPlant = eventData.HasPurchasedEasterPlant
+        -- local hasBeenGivenStarterPack = eventData.HasBeenGivenStarterPack
+
+        -- -- 2. Unpack nested 'GoldenEgg' variables safely
+        -- local goldenEggBuyAmount = eventData.GoldenEgg and eventData.GoldenEgg.BuyAmount
+        -- local goldenEggLastBuyTime = eventData.GoldenEgg and eventData.GoldenEgg.LastBuyTime
+
+        -- 3. Unpack nested 'RequiredPlantInfo' variables safely
+        local requiredPlantSize = eventData.RequiredPlantInfo and eventData.RequiredPlantInfo.RequiredPlantSize or 0
+        local requiredPlantName = eventData.RequiredPlantInfo and eventData.RequiredPlantInfo.RequiredPlant or ""
+        local requiredPlantMutation = eventData.RequiredPlantInfo and eventData.RequiredPlantInfo.RequiredPlantMutation
+
+        local muts = {}
+        if requiredPlantMutation then
+            muts[requiredPlantMutation] = true
+        end
+
+        -- Example usage:
+        --print("Loaded data for Easter Candy Carrot! Current Progression:", progression)
+
+        -- You can return everything if you need to pass it to another script
+        return requiredPlantName, requiredPlantSize, muts
+    end,
+
+    BuyEggs                  = function()
+        if not FOtherSettings.autobuyeggs_event then
+            return
+        end
+
+        local eventData = VulnManager.GetBigDataUsingKey("EasterEventData")
+        if not eventData then return nil end
+
+        -- -- 2. Unpack nested 'GoldenEgg' variables safely
+        local goldenEggBuyAmount = eventData.GoldenEgg and eventData.GoldenEgg.BuyAmount or 0
+        --local goldenEggLastBuyTime = eventData.GoldenEgg and eventData.GoldenEgg.LastBuyTime
+
+        if goldenEggBuyAmount < 12 then
+            game:GetService("ReplicatedStorage").GameEvents.EasterEvent.TryBuyGoldenEggRE:FireServer()
+        end
+    end,
+
+    FeedRequiredPlant        = function()
+        task.spawn(function()
+            while true do
+                task.wait(10)
+
+                if EventsManager.EasterAngryPlant.e_isfirst then
+                    task.wait(10)
+                    EventsManager.EasterAngryPlant.e_isfirst = false
+                    continue
+                end
+
+                if Varz.IsPaused() then
+                    continue
+                end
+
+                EventsManager.EasterAngryPlant.BuyEggs()
+
+
+                local pos = EventsManager.EasterEvent.GetEasterSeedPlacementPoint()
+                local plantName, weight, muts = EventsManager.EasterAngryPlant.GetCurrentRequiredPlant()
+                if not plantName then
+                    continue
+                end
+
+                if not FOtherSettings.eventangry_plant_auto then
+                    continue
+                end
+
+                if not EventsManager.EasterEvent.IsEasterGarden() then
+                    continue
+                end
+
+                -- get plant from backpack #easter
+                local item = InventoryManager.GetFruitUsingNameWeightAndMutation(plantName, weight, muts)
+                if item then
+                    -- print("Have item for angry plant ", plantName, weight)
+
+                    if EventsManager.EasterAngryPlant.AngryPlantModel then
+                        GameDataManager.Teleport.TeleportTo(EventsManager.EasterAngryPlant.AngryPlantModel, true)
+                        task.wait(1)
+                    else
+                        continue
+                    end
+                    Varz.IS_SEEDING = true
+                    task.wait(2)
+
+                    unequipTools()
+                    task.wait(0.4)
+                    EquipToolOnChar(item)
+                    game:GetService("ReplicatedStorage").GameEvents.SeedPackGiverEvent:FireServer("SubmitHeldPlant")
+                    task.wait(2)
+                    game:GetService("ReplicatedStorage").GameEvents.SeedPackGiverEvent:FireServer("SubmitHeldPlant")
+                    Varz.IS_SEEDING = false
+
+                    game:GetService("ReplicatedStorage").GameEvents.SeedPackGiverEvent:FireServer("ClaimPremiumPack")
+                else
+                    -- print("# Dont Have item for angry plant ", plantName, weight)
+                    -- enforce collection or plant
+
+                    local plants_singles = {
+                        ["Easter Liquorice"] = true,
+                        ["Easter Candy Carrot"] = true,
+                    }
+                    local count = 0
+
+                    if plants_singles[plantName] then
+                        count = FarmManager.GetPlantCountBySeedAndWeightMutations(plantName, weight)
+                    else
+                        count = FarmManager.GetPlantCountBySeed(plantName)
+                    end
+
+                    if count > 30 then
+                        continue
+                    end
+
+                    if count <= 0 then
+                        -- print("Dont have this plant ", plantName)
+                        local amountp = 2
+
+                        Varz.IS_SEEDING = true
+                        task.wait(1)
+
+
+                        -- if single harvest then plant more
+                        if plants_singles[plantName] then
+                            amountp = 9
+                            -- This must be placed before seeding
+                            -- place a chocolate sprinkler, if mutation is needed
+
+                            if FOtherSettings.autoplacechocolatesprinkler then
+                                if muts["Choc"] then
+                                    local spname = "Chocolate Sprinkler"
+                                    local hasOnFarm = FarmManager.GetSprinklerOnFarm(spname)
+                                    if not hasOnFarm then
+                                        local sprinklerOb = InventoryManager.GetSprinklerUsingName(spname)
+                                        --print("Get Chocolate Sprinkler")
+                                        if sprinklerOb then
+                                            unequipTools()
+                                            EquipToolOnChar(sprinklerOb)
+                                            task.wait(0.1)
+                                            InventoryManager.PlaceSprinkler(pos)
+                                            --  print("Place Chocolate Sprinkler")
+                                        end
+                                    end
+                                end
+                            end
+                        end
+
+                        _FruitCollectorMachine.PlaceSeedSmart(plantName, amountp, pos)
+                        Varz.IS_SEEDING = false
+                    else
+                        -- we have these plants. harvest for angry plants
+                        -- find and collect fruit with mutation , weight and name
+                        --print("Collect plant for angry plant ", plantName)
+                        local didcollect = _FruitCollectorMachine.CollectFruitByNameAndMutationAndWeight(plantName, 1,
+                            weight, muts)
+                        task.wait(1)
+
+                        -- force collect if we failed to collect
+                        if not didcollect then
+                            _FruitCollectorMachine.CollectFruitByNameAndMutationAndWeight(plantName, 3,
+                                weight, muts, true)
+                        end
+                        task.wait(1)
+                    end
+                end
+            end
+        end)
+    end,
+
+    SkipPlantEaster          = function(plantName, pWeight, plantMutations1, plantVariants1)
+        -- Instantly look up the required list for this specific plant name
+        if not FOtherSettings.eventangry_plant_auto then
+            return false
+        end
+
+        local requiredList = Varz.EasterAngryPlants[plantName]
+
+        -- If this plant isn't in our quest list AT ALL, instantly return false
+        if not requiredList then
+            return false
+        end
+
+        local plantMutations = plantMutations1 or {}
+        local plantVariants = plantVariants1 or {}
+
+        -- Only loop through the few requirements for THIS specific plant
+        for _, item in ipairs(requiredList) do
+            if pWeight >= item.weight then
+                local isMatch = true
+
+                -- Check mutations
+                if item.is_mut then
+                    local has_required_mut = false
+                    for req_mut, _ in pairs(item.mutations) do
+                        if plantMutations[req_mut] then
+                            has_required_mut = true
+                            break
+                        end
+                    end
+                    if not has_required_mut then
+                        isMatch = false
+                    end
+                end
+
+                -- Check variants
+                if isMatch and item.is_variant then
+                    local has_required_variant = false
+                    for req_var, _ in pairs(item.variants) do
+                        if plantVariants[req_var] then
+                            has_required_variant = true
+                            break
+                        end
+                    end
+                    if not has_required_variant then
+                        isMatch = false
+                    end
+                end
+
+                -- If it matched this specific requirement, skip it
+                if isMatch then
+                    return true
+                end
+            end
+        end
+
+        return false -- Passed all checks, don't skip
+    end,
+    LoadModuleRequiredPlants = function()
+        local EASTER_SeedGiverQuestProgression = require(game:GetService("ReplicatedStorage").Data
+            .EASTER_SeedGiverQuestProgression)
+
+        -- Reset the table just in case it runs multiple times
+        Varz.EasterAngryPlants = {}
+
+        for _, entry in ipairs(EASTER_SeedGiverQuestProgression) do
+            local mutationsMap = {}
+            local variantsMap = {}
+
+            if entry.MUTATION then
+                mutationsMap[entry.MUTATION] = true
+            end
+
+            if entry.VARIANT then
+                variantsMap[entry.VARIANT] = true
+            end
+
+            local plantName = entry.PLANT_NAME
+
+            -- If this is the first time seeing this plant name, create an empty list for it
+            if not Varz.EasterAngryPlants[plantName] then
+                Varz.EasterAngryPlants[plantName] = {}
+            end
+
+            -- Insert the requirement into this specific plant's list
+            table.insert(Varz.EasterAngryPlants[plantName], {
+                is_mut = entry.MUTATION ~= nil,
+                is_variant = entry.VARIANT ~= nil,
+                mutations = mutationsMap,
+                variants = variantsMap,
+                weight = entry.WEIGHT
+            })
+        end
+
+        --print("Grouped Dictionary Built Successfully!")
+    end
+}
+
+EventsManager.EasterAngryPlant.GetAngryPlantMode()
+EventsManager.EasterAngryPlant.LoadModuleRequiredPlants()
+EventsManager.EasterAngryPlant.FeedRequiredPlant()
+
 
 EventsManager.EasterEvent = {
 
@@ -16847,6 +17394,19 @@ EventsManager.EasterEvent = {
 
     SellAllEaster = function()
         if not FOtherSettings.is_autosell_event then return end
+
+        if FOtherSettings.eventangry_plant_auto then
+            local plantName, weight, muts = EventsManager.EasterAngryPlant.GetCurrentRequiredPlant()
+            if plantName then
+                -- get plant from backpack #easter
+                local item = InventoryManager.GetFruitUsingNameWeightAndMutation(plantName, weight, muts)
+                if item then
+                    -- print("Cant sell. we have a required plant in backpack for angry plants")
+                    return false
+                end
+            end
+        end
+
         game:GetService("ReplicatedStorage").GameEvents.EasterEvent.EasterSellInventoryRE:FireServer()
     end,
 
@@ -16986,7 +17546,7 @@ EventsManager.EasterEvent = {
         }
 
         local configx = {
-            amount = 25,
+            amount = 50,
             batch_mode = true,
             random = true,
             whitelist_mutation = {},
@@ -17010,13 +17570,13 @@ EventsManager.EasterEvent = {
                     break
                 end
 
-                if EventsManager.EasterEvent.ModeSwitching > 0 then
-                    configx.whitelist_mutation = valid_mutations
-                    EventsManager.EasterEvent.ModeSwitching = 0
-                else
-                    configx.whitelist_mutation = {}
-                    EventsManager.EasterEvent.ModeSwitching = 1
-                end
+                -- if EventsManager.EasterEvent.ModeSwitching > 0 then
+                --     configx.whitelist_mutation = valid_mutations
+                --     EventsManager.EasterEvent.ModeSwitching = 0
+                -- else
+                --     configx.whitelist_mutation = {}
+                --     EventsManager.EasterEvent.ModeSwitching = 1
+                -- end
 
                 local _c = _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig(list_names,
                     configx)
@@ -17032,8 +17592,6 @@ EventsManager.EasterEvent = {
                     break
                 end
             end
-
-            task.wait(0.1)
         else
             while true do
                 task.wait(0.5)
@@ -17050,24 +17608,21 @@ EventsManager.EasterEvent = {
                     break
                 end
 
-                if EventsManager.EasterEvent.ModeSwitching > 0 then
-                    configx.whitelist_mutation = valid_mutations
-                    EventsManager.EasterEvent.ModeSwitching = 0
-                else
-                    configx.whitelist_mutation = {}
-                    EventsManager.EasterEvent.ModeSwitching = 1
-                end
+                -- if EventsManager.EasterEvent.ModeSwitching > 0 then
+                --     configx.whitelist_mutation = valid_mutations
+                --     EventsManager.EasterEvent.ModeSwitching = 0
+                -- else
+                --     configx.whitelist_mutation = {}
+                --     EventsManager.EasterEvent.ModeSwitching = 1
+                -- end
 
-                configx.amount = 19
+                configx.amount = 50
                 configx.batch_mode = false
                 local _c = _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig(collectfruits,
                     configx)
 
                 EventsManager.EasterEvent.SellAllEaster()
             end
-
-
-            task.wait(0.1)
         end
     end,
 
@@ -17113,7 +17668,32 @@ EventsManager.EasterEvent = {
         Varz.IS_SEEDING = true
 
 
+        local max_allowed = 15
+        local limitmax_placement = {
+            ["Easter Liquorice"] = true,
+            ["Easter Candy Carrot"] = true,
+            ["Easter Chocolate Berry"] = true,
+            ["Easter Gumball"] = true,
+        }
+
         for seedname, _ in pairs(easterPlants) do
+            if not FOtherSettings.is_auto_plantseedEvent then
+                break
+            end
+
+            if limitmax_placement[seedname] then
+                local count = FarmManager.GetPlantCountBySeed(seedname)
+                if count >= max_allowed then
+                    continue
+                end
+            end
+
+            local countx = FarmManager.GetPlantCountBySeed(seedname)
+            if countx > 150 then
+                continue
+            end
+
+
             _FruitCollectorMachine.PlaceSeedSmart(seedname, 9, pos)
             task.wait(0.5)
         end
@@ -18361,6 +18941,7 @@ VulnManager.Visuals = {
 
 VulnManager.FoundMarmots = {}
 VulnManager.FoundAcorn = {}
+VulnManager.FoundEasterEggs = {}
 
 
 
@@ -18436,6 +19017,22 @@ VulnManager.RedPanda = {
         -- 3. Combine all lines and update the UI label
         UI_LABELS.lbl_redpanda_information:SetText(table.concat(info_lines, "\n"))
     end,
+}
+
+VulnManager.EasterBunny = {
+    Teleport = function(target)
+        if not FOtherSettings.easterbunnyeggrewardcollect then
+            return
+        end
+
+        local success, result = pcall(function()
+            VulnManager.TeleportToTarget(target)
+        end)
+
+        if not success then
+            warn("Error ", result)
+        end
+    end
 }
 
 VulnManager.ChubbyChipmunk = {
@@ -18828,6 +19425,10 @@ _S.Workspace.ChildAdded:Connect(function(child)
             table.insert(VulnManager.FoundMarmots, child)
         end
 
+        if child.Name == "EasterEggReward" then
+            table.insert(VulnManager.FoundEasterEggs, child)
+        end
+
         if child.Name == "Acorn" then
             local owner = child:GetAttribute("OWNER")
             if owner and owner == Varz.player_userid then
@@ -19000,6 +19601,20 @@ if not _Helper.task_collect_objects then
             end
             task.wait(2)
 
+            if #VulnManager.FoundEasterEggs > 0 then
+                -- Remove the first item from the list
+                local item = table.remove(VulnManager.FoundEasterEggs, 1)
+
+                -- Teleport to that item
+
+                VulnManager.EasterBunny.Teleport(item)
+
+
+                task.wait(0.1) -- small delay after teleport
+                continue
+            end
+
+
             -- Skip loop if no new items
             if #VulnManager.FoundMarmots > 0 then
                 -- Remove the first item from the list
@@ -19011,6 +19626,7 @@ if not _Helper.task_collect_objects then
 
 
                 task.wait(0.1) -- small delay after teleport
+                continue
             end
 
             if #VulnManager.FoundAcorn > 0 then
@@ -19023,6 +19639,7 @@ if not _Helper.task_collect_objects then
 
 
                 task.wait(0.1) -- small delay after teleport
+                continue
             end
         end
     end)
@@ -33717,7 +34334,7 @@ local function M_UI_PLANTS()
 
 
     --====================================================
-    -- ⚠️ Sprinklers
+    -- ⚠️ Sprinklers #delete
     --====================================================
 
     do
@@ -34534,7 +35151,7 @@ local function MEventsUi()
     -- Groups
     --local eventJungle = UIEventsTab:AddLeftGroupbox("🌴 <font color='#228B22'>Jungle Event</font> 🍂", "tree")
 
-    local gFeedEvent = UIEventsTab:AddLeftGroupbox("🌈 Rainbow Event", "tasks")
+    local gFeedEvent = UIEventsTab:AddLeftGroupbox("🤖 Easter Garden Pets", "tasks")
 
     local gFallEvent = UIEventsTab:AddLeftGroupbox(type_fruit_event_name, "snowflake")
     local gQuest = UIEventsTab:AddLeftGroupbox("🍂 <font color='#FFD700'>Quests</font> 🌽", "tasks")
@@ -34556,8 +35173,16 @@ local function MEventsUi()
     -- #Rainbow
     if gFeedEvent then
         gFeedEvent:AddLabel({
-            Text =
-            "💡 Automatically collects pots and required fruits",
+            Text = "💡 Pets in Easter Garden\n" ..
+                "1. Disable Pick & Place System\n" ..
+                "2. Disable Gifting / Trade System\n" ..
+                "3. Send a trade invite to your alt account\n" ..
+                "4. Send any item (e.g. fruit)\n" ..
+                "5. Accept the trade on both accounts\n" ..
+                "6. Confirm the trade on your alt account\n\n" ..
+                "➡️ Finally, use the 'Confirm & Switch Easter Garden' button below\n" ..
+                "   to confirm the trade and switch your garden slot\n\n" ..
+                "⏱ Cooldown: 3 minutes between garden switches",
             DoesWrap = true
         })
 
@@ -34567,6 +35192,33 @@ local function MEventsUi()
         --     DoesWrap = true
         -- })
 
+
+        gFeedEvent:AddButton({
+            Text = "Confirm & Switch Easter G",
+            Func = function()
+                if not TaskManager.TradeSystem.IsTradeActive() then
+                    Library:Notify(
+                        "Trade must be active, and the other player must have already confirmed their side.",
+                        5
+                    )
+                    return
+                end
+
+                if EventsManager.EasterEvent.IsEasterGarden() then
+                    Library:Notify(
+                        "You already have easter garden active. Please switch to normal slot then wait 3mins and try again.",
+                        5
+                    )
+                    return
+                end
+                task.spawn(function()
+                    TaskManager.TradeSystem.TradeAcceptButton()
+                end)
+                task.wait(0.2)
+                game:GetService("ReplicatedStorage").GameEvents.SaveSlotService.RequestChangeSlots:FireServer(
+                    "EASTER_2026")
+            end,
+        })
 
         -- local exludealienated = gFeedEvent:AddDropdown("gAlinatedAvoid", {
         --     Values = {},
@@ -34597,16 +35249,16 @@ local function MEventsUi()
         -- })
 
         -- Auto collect fruit toggle
-        gFeedEvent:AddDivider()
-        gFeedEvent:AddToggle("autofeedrainbowevent", {
-            Text = "⚡ Enable Event",
-            Default = FOtherSettings.rainbowevent.enabled,
-            Tooltip = "Enables the event",
-            Callback = function(Value)
-                FOtherSettings.rainbowevent.enabled = Value
-                SaveDataOther()
-            end
-        })
+        -- gFeedEvent:AddDivider()
+        -- gFeedEvent:AddToggle("autofeedrainbowevent", {
+        --     Text = "⚡ Enable Event",
+        --     Default = FOtherSettings.rainbowevent.enabled,
+        --     Tooltip = "Enables the event",
+        --     Callback = function(Value)
+        --         FOtherSettings.rainbowevent.enabled = Value
+        --         SaveDataOther()
+        --     end
+        -- })
     end
 
     ----------------------------------------------
@@ -35515,6 +36167,38 @@ local function MEventsUi()
         -- gFallEvent:AddDivider()
         -- Enable or disable Fall market event
 
+        gFallEvent:AddToggle("autoangryplant", {
+            Text = "🐉 <font color='#DB00D4'>Auto Angry Plant</font>",
+            Default = FOtherSettings.eventangry_plant_auto,
+            Tooltip = "Submits , collects fruits for angry plant",
+            Callback = function(Value)
+                FOtherSettings.eventangry_plant_auto = Value
+                SaveDataOther()
+            end
+        })
+
+        gFallEvent:AddToggle("autochocolatesprinklers", {
+            Text = "⚪ Chocolate Sprinkler",
+            Default = FOtherSettings.autoplacechocolatesprinkler,
+            Tooltip = "Auto places the chocolate sprinkler.",
+            Callback = function(Value)
+                FOtherSettings.autoplacechocolatesprinkler = Value
+                SaveDataOther()
+            end
+        })
+
+        gFallEvent:AddToggle("autobuyeggseaster", {
+            Text = "🥚 Buy Easter Eggs",
+            Default = FOtherSettings.autobuyeggs_event,
+            Tooltip = "Buys 12 eggs every 8 hour",
+            Callback = function(Value)
+                FOtherSettings.autobuyeggs_event = Value
+                SaveDataOther()
+            end
+        })
+
+        gFallEvent:AddDivider()
+
         gFallEvent:AddToggle("autoplantseedsevent", {
             Text = "🍀 <font color='#00DB73'>Auto Plant Seeds</font>",
             Default = FOtherSettings.is_auto_plantseedEvent,
@@ -35971,6 +36655,9 @@ local function UiPetsSideTab()
 
     local pandaUi = PetsTab:AddLeftGroupbox("Red Panda", "panda")
 
+
+    local easterbunnyUi = PetsTab:AddLeftGroupbox("Easter Bunny", "bone")
+
     local petEleGroup = nil
 
     -- #unlock feature
@@ -36215,6 +36902,27 @@ local function UiPetsSideTab()
     ----======================= end Red Panda
 
 
+
+    ----======================= Easter Bunny
+
+    easterbunnyUi:AddLabel({
+        Text = "When enabled it will collect easter eggs when you have easter bunny pet in your farm.",
+        DoesWrap = true
+    })
+    easterbunnyUi:AddDivider()
+
+    easterbunnyUi:AddToggle("toggleeasterbunny", {
+        Text = "⚡ Auto EasterBunny Reward",
+        Default = FOtherSettings.easterbunnyeggrewardcollect,
+        Tooltip = "Automatically collects easter eggs",
+        Callback = function(Value)
+            FOtherSettings.easterbunnyeggrewardcollect = Value
+            SaveDataOther()
+        end
+    })
+
+    easterbunnyUi:AddDivider()
+    ----======================= end Easter Bunny
 
 
 
@@ -39202,100 +39910,6 @@ end)
 
 
 
--- #rainbowevent #rainbow #event
-TaskManager.RainbowEvent = {
-    FindPots = function()
-        local pots = {}
-        for _, obj in ipairs(_S.Workspace:GetChildren()) do
-            if obj.Name == "Pot" and obj:IsA("Model") then
-                table.insert(pots, obj)
-            end
-        end
-
-        return pots
-    end,
-    CollectRequiredFruits = function()
-        local valid_mutations = {
-            ["Luck"] = true,
-        }
-        local configx = {
-            amount = 20,
-            batch_mode = false,
-            whitelist_mutation = valid_mutations,
-            --blacklist_mutation = FOtherSettings.mutation_whitelist,
-            --variants = FOtherSettings.fruit_variants_select,
-            --mut_count = FOtherSettings.max_mutation_count
-        }
-        local collectfruits = {}
-        _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig(collectfruits,
-            configx)
-        task.wait(1)
-    end,
-    CollectPots = function()
-        -- we have enough, claim pots
-        local pots = TaskManager.RainbowEvent.FindPots()
-        if #pots == 0 then
-            --print("no pots")
-            return false
-        end
-
-        local mut = {
-            ["Luck"] = true
-        }
-        local count = InventoryManager.GetFruitCountUsingMutation(mut)
-        if count < 3 then
-            -- collect fruits
-            TaskManager.RainbowEvent.CollectRequiredFruits()
-            return false
-        end
-
-        for _, item in ipairs(pots) do
-            local p = GameDataManager.ProximityPrompt.FindProximityPrompt(item)
-            if p then
-                GameDataManager.Teleport.TeleportTo(item, true)
-                task.wait(3)
-                --  print("Active")
-                GameDataManager.ProximityPrompt.ActivateProximityPrompt(p)
-                task.wait(2)
-            else
-                --  print("p not found")
-            end
-
-            local count1 = InventoryManager.GetFruitCountUsingMutation(mut)
-            if count1 < 3 then
-                break
-            end
-        end
-    end,
-    EventLoop = function()
-        if not FOtherSettings.rainbowevent.enabled then
-            return false
-        end
-        TaskManager.RainbowEvent.CollectPots()
-    end
-}
-
-
-
-task.spawn(function()
-    while true do
-        task.wait(10)
-        if not FarmManager.IsDataFullyLoaded() or not FarmManager.IsFarmFullyLoaded() then
-            task.wait(5)
-            continue
-        end
-
-        if Varz.IsPaused() then
-            task.wait(math.random(2, 5))
-            continue
-        end
-
-        TaskManager.RainbowEvent.EventLoop()
-    end
-end)
-
-
-
 
 -- #smith
 if TaskManager.loop_smithman then
@@ -39968,6 +40582,8 @@ TaskManager.busy_task_auto_shovel_sprinkler = function()
     return false
 end
 
+TaskManager.AlreadyDeletedSprinklers = {}
+-- #delete
 TaskManager.task_auto_shovel_sprinkler = task.spawn(function()
     while true do
         task.wait(3)
@@ -39998,28 +40614,44 @@ TaskManager.task_auto_shovel_sprinkler = task.spawn(function()
             continue
         end
 
+        local protecteditem = "Chocolate Sprinkler"
+        local dideq = false
 
         for item_name, _v in pairs(FSettings.auto_remove_sp_list) do
             local items = FarmManager.GetObjectsUsingName(item_name)
+
+            if item_name == protecteditem and TaskManager.AlreadyDeletedSprinklers[protecteditem] then
+                continue
+            end
 
             if #items > 0 then
                 local tool = InventoryManager.GetShovel()
                 if not tool then continue end
 
+
+
                 if TaskManager.busy_task_auto_shovel_sprinkler() then break end
                 unequipTools()
                 EquipToolOnChar(tool)
+                dideq = true
                 for _, value in pairs(items) do
+                    if item_name == protecteditem and TaskManager.AlreadyDeletedSprinklers[protecteditem] then
+                        break
+                    end
+
                     if TaskManager.busy_task_auto_shovel_sprinkler() then break end
                     FarmManager.DeleteObject(value)
                     task.wait(0.9)
+                    TaskManager.AlreadyDeletedSprinklers[item_name] = true
                 end
-
-                unequipTools()
             else
                 --warn("Nothing found for  " .. item_name)
             end
             task.wait(0.05)
+        end
+
+        if dideq then
+            unequipTools()
         end
     end
 end)
@@ -40041,7 +40673,7 @@ task.spawn(function()
 
         local spx = FOtherSettings.autoplacesprinklers or {}
 
-        _Helper.JsonPrint(EventsManager.EasterEvent.PlacedSprinklers)
+        --  _Helper.JsonPrint(EventsManager.EasterEvent.PlacedSprinklers)
 
         if next(spx) == nil then
             continue
