@@ -217,7 +217,7 @@ end
 
 -- #start
 _S.AppName = "Exotic Hub"
-_S.CurentV = "v1.39.6"
+_S.CurentV = "v1.40.0"
 
 local Varz = {}
 Varz.dev_tools = true
@@ -563,6 +563,7 @@ local FOtherSettings = {
     eventangry_plant_auto                      = true,
     autoplacechocolatesprinkler                = true,
     autobuyeggs_event                          = true,
+    iseaster_bunnyevil                         = false,
     autoplacesprinklers                        = {},
     enable_autoplacesprinklers                 = false,
     newyear_dailyclaim                         = false,
@@ -678,6 +679,15 @@ local FSessionDx = {
 
 -- Save and other settings
 local FSettings = {
+    petfav = {
+        allow_pet_list = {},
+        allow_mutation_list = {},
+        min_age = 1,
+        max_age = 100,
+        min_weight = 0.80,
+        max_weight = 2.86,
+    },
+
     valentines = {
         enabled_event = false,
         claim_rewards = true,
@@ -8354,6 +8364,21 @@ local SeedRarities = {
     Transcendent = 8,
 }
 
+
+_FruitCollectorMachine.CountMutationOnFruitFast = function(fruit)
+    if not fruit then return 0 end
+    local fruitAttrs = fruit:GetAttributes()
+    if not fruitAttrs then return 0 end
+    local found = 0
+    for attrName, _ in pairs(fruitAttrs) do
+        if list_mutations[attrName] ~= nil then
+            found = found + 1
+        end
+    end
+
+    return found
+end
+
 -- #mutcount
 _FruitCollectorMachine.CountMutationOnFruit = function(fruit, countmutx)
     -- FIX 1 & 3: Ensure countmut is a number. Default to 1 if nil.
@@ -8774,30 +8799,14 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNa
                 continue
             end
 
+            local count_mutations = _FruitCollectorMachine.CountMutationOnFruitFast(fruit)
+
             --   Store the fruit object AND its plant name for sorting
-            table.insert(allValidFruits, { FruitObject = fruit, PlantName = plantName, w = weight })
+            table.insert(allValidFruits,
+                { FruitObject = fruit, PlantName = plantName, w = weight, mutcount = count_mutations })
         end
     end
 
-
-    -- 2. SORT THE LIST BY RARITY
-    -- table.sort(allValidFruits, function(entryA, entryB)
-    --     -- Get the rarity name (e.g., "Rare") using the plant name
-    --     -- Default to "Common" if not found in Varz.SeedRarity
-    --     local rarityNameA = Varz.SeedRarity[entryA.PlantName] or "Common"
-    --     local rarityNameB = Varz.SeedRarity[entryB.PlantName] or "Common"
-
-    --     -- Get the numerical weight for that rarity
-    --     -- Default to 1 (Common's weight) if not in our weights table
-    --     local weightA = SeedRarities[rarityNameA] or 1
-    --     local weightB = SeedRarities[rarityNameB] or 1
-
-    --     -- Sort from highest weight to lowest (Prismatic -> Common)
-    --     return weightA > weightB
-    -- end)
-
-
-    -- 2. SORT THE LIST BY RARITY, THEN BY FRUIT WEIGHT
     table.sort(allValidFruits, function(entryA, entryB)
         -- Get the rarity name (e.g., "Rare") using the plant name
         local rarityNameA = Varz.SeedRarity[entryA.PlantName] or "Common"
@@ -8807,15 +8816,18 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNa
         local rarityValA = SeedRarities[rarityNameA] or 1
         local rarityValB = SeedRarities[rarityNameB] or 1
 
-        -- PRIMARY SORT: If they are the same rarity, sort by physical fruit weight
-        if rarityValA == rarityValB then
-            -- Heaviest fruit first
-            return entryA.w > entryB.w
+        -- 1st Check: Sort by Rarity (Prismatic -> Common)
+        if rarityValA ~= rarityValB then
+            return rarityValA > rarityValB
         end
 
-        -- SECONDARY SORT: Otherwise, sort by rarity
-        -- Rarest fruit first (Prismatic -> Common)
-        return rarityValA > rarityValB
+        -- 2nd Check: If rarities are the same, sort by Mutation Count (Highest first)
+        if entryA.mutcount ~= entryB.mutcount then
+            return entryA.mutcount > entryB.mutcount
+        end
+
+        -- 3rd Check: If rarity AND mutations are the same, sort by Weight (Heaviest first)
+        return entryA.w > entryB.w
     end)
 
 
@@ -10057,7 +10069,30 @@ ShovelManager.Plant = {
         end
         return fruits_list, has_fruits
     end,
+    GetPlantsToDestroyByName = function(pName)
+        local delete_targets = {}
+        for _, plantModel in ipairs(FarmManager.Get_Plants_Physical_Objects()) do
+            if not plantModel:IsA("Model") then continue end
+            if plantModel.Name ~= pName then
+                continue
+            end
 
+            local fruitsFolder = plantModel:FindFirstChild("Fruits")
+
+            if not fruitsFolder then
+                continue
+            end
+
+            local potentialFruits, has_fruits = ShovelManager.Plant.GetMultiHarvestFruits(fruitsFolder)
+            if not has_fruits then
+                table.insert(delete_targets, plantModel)
+                -- warn("No fruits: " .. plantModel.Name)
+                continue
+            end
+        end
+
+        return delete_targets
+    end,
 
     GetPlantsToDestroy = function()
         local delete_targets = {}
@@ -14123,6 +14158,155 @@ end
 
 
 
+---========= Fav un Fav system #unfav
+TaskManager.FavouritePets = {
+    FavInprocess = false,
+    max_delay_fav = 0.1,
+    GetPetsForFav = function(isFav)
+        local ls              = {}
+        local pets            = GameDataManager.Inventory.GetPetInventory()
+
+        local min_age         = FSettings.petfav.min_age or 1
+        local max_age         = FSettings.petfav.max_age or 1
+
+        local baseweight_min  = FSettings.petfav.min_weight or 0.80
+        local base_weight_max = FSettings.petfav.max_weight or 2.86
+
+        -- Pet filter. like mimic
+        local allowed_list    = FSettings.petfav.allow_pet_list or {}
+        local allow_mutations = FSettings.petfav.allow_mutation_list or {}
+
+
+        local has_allow_list = false
+        local has_mut_list   = false
+
+        if next(allowed_list) == nil then
+            Library:Notify("No pet types selected", 3)
+            return {}
+        end
+
+        if next(allowed_list) then
+            has_allow_list = true
+        end
+
+        if next(allow_mutations) then
+            has_mut_list = true
+        end
+
+        for uuid, _petData in pairs(pets) do
+            local _UUID = _petData.UUID
+            local PetData = _petData.PetData
+            local PetType = _petData.PetType -- name of the name
+
+            -- Not looking for this pet
+            if has_allow_list then
+                if not allowed_list[PetType] then
+                    continue
+                end
+            end
+
+            local IsFavorite = PetData.IsFavorite
+
+            -- if user wants to get already pets or unfav pets
+            if isFav == IsFavorite then
+                continue
+            end
+
+            --local Boosts = PetData.Boosts
+            local Name = PetData.Name
+            --local LevelProgress = PetData.LevelProgress
+            --local EggName = PetData.EggName
+            local Level = PetData.Level
+            --local Hunger = PetData.Hunger
+            local BaseWeight = PetData.BaseWeight
+            local MutationType = PetData.MutationType or ""
+            --warn("Found pet: " .. Name)
+            local CurrentMutationOnPet = MutationMachineManager.AllMutationListEnum[MutationType]
+
+            if has_mut_list then
+                if CurrentMutationOnPet then
+                    if not allow_mutations[CurrentMutationOnPet] then
+                        continue
+                    end
+                else
+                    continue
+                end
+            end
+
+
+            local real_weight = GetRealPetWeight(BaseWeight, 1)
+            -- local pet_weight_display = tonumber(string.format("%.2f", real_weight)) -- rounds to 2 decimals
+
+            -- out of range level
+
+            if Level < min_age or Level > max_age then
+                continue
+            end
+
+            -- out of range base weight
+            if real_weight < baseweight_min or real_weight > base_weight_max then
+                continue
+            end
+
+            local tool = InventoryManager.GetPetUsingUUID(uuid)
+            if tool then
+                local dx = {
+                    pet_uuid = uuid,
+                    pet_tool = tool
+                }
+                table.insert(ls, dx)
+            end
+        end
+
+        return ls
+    end,
+
+    FavAllPets = function()
+        if TaskManager.FavouritePets.FavInprocess then
+            Library:Notify("Already running please wait.", 3)
+            return false
+        end
+        local ls = TaskManager.FavouritePets.GetPetsForFav(true)
+        if ls and #ls <= 0 then
+            return false
+        end
+
+        TaskManager.FavouritePets.FavInprocess = true
+        Library:Notify("Started favorite process", 3)
+        for _, item in ipairs(ls) do
+            pcall(function()
+                MakeFruitsFavSingle(item.pet_tool)
+            end)
+
+            task.wait(TaskManager.FavouritePets.max_delay_fav)
+        end
+        Library:Notify("Completed favorite process", 3)
+        TaskManager.FavouritePets.FavInprocess = false
+    end,
+    UnFavAllPets = function()
+        if TaskManager.FavouritePets.FavInprocess then
+            Library:Notify("Already running please wait.", 3)
+            return false
+        end
+        local ls = TaskManager.FavouritePets.GetPetsForFav(false)
+        if ls and #ls <= 0 then
+            return false
+        end
+
+        TaskManager.FavouritePets.FavInprocess = true
+        Library:Notify("Started unfavorite process", 3)
+        for _, item in ipairs(ls) do
+            pcall(function()
+                MakeFruitsFavSingle(item.pet_tool)
+            end)
+            task.wait(TaskManager.FavouritePets.max_delay_fav)
+        end
+        Library:Notify("Completed unfavorite process", 3)
+        TaskManager.FavouritePets.FavInprocess = false
+    end
+}
+
+
 
 ---------------------------------------------------
 ----- GIFT #gift
@@ -17059,6 +17243,87 @@ EventsManager.EasterAngryPlant = {
             "Model")
     end,
 
+    GetPlantToShovel         = function()
+        -- Fetching the data using the specific key
+        local eventData = VulnManager.GetBigDataUsingKey("EasterEventData")
+        if not eventData then return nil end
+
+        -- [NEW] Unpack Candy Blossom Progress
+        local candyBlossomShardProgress = eventData.CandyBlossomShardProgress
+
+        -- 4. [NEW] Unpack nested 'EvilBunnyData' variables safely
+        local ebTotalSacrifices = eventData.EvilBunnyData and eventData.EvilBunnyData.TotalSacrifices
+        local ebQuestState = eventData.EvilBunnyData and eventData.EvilBunnyData.QuestState
+        local ebTargetPlantName = eventData.EvilBunnyData and eventData.EvilBunnyData.TargetPlantName
+        local ebTargetPlantKey = eventData.EvilBunnyData and eventData.EvilBunnyData.TargetPlantKey
+        local ebQuestStartTime = eventData.EvilBunnyData and eventData.EvilBunnyData.QuestStartTime
+        local ebPlantScore = eventData.EvilBunnyData and eventData.EvilBunnyData.PlantScore
+        local ebLastSacrificeTime = eventData.EvilBunnyData and eventData.EvilBunnyData.LastSacrificeTime
+
+        -- Example usage:
+        -- print("Candy Blossom Shards:", candyBlossomShardProgress)
+
+        if ebQuestState == "Active" then
+            -- print("Evil Bunny is active! Target:", ebTargetPlantName, "| Score:", ebPlantScore)
+            return ebTargetPlantName
+        end
+
+        if ebQuestState == "Idle" then
+            game:GetService("ReplicatedStorage").GameEvents.EvilBunny.EvilBunnyInteract:InvokeServer()
+            task.wait(1)
+            game:GetService("ReplicatedStorage").GameEvents.EvilBunny.EvilBunnyGiveQuest:InvokeServer()
+        end
+
+        if ebQuestState == "Complete" then
+            game:GetService("ReplicatedStorage").GameEvents.EvilBunny.EvilBunnyInteract:InvokeServer()
+            task.wait(1)
+            game:GetService("ReplicatedStorage").GameEvents.EvilBunny.EvilBunnyClaim:InvokeServer()
+            Library:Notify("Evil Bunny reward claimed.")
+        end
+
+        -- You can adjust the return statement to pass back exactly what your other scripts need
+        return nil
+    end,
+
+    ShovelEvilBunnyPlant     = function()
+        if not FOtherSettings.iseaster_bunnyevil then
+            return
+        end
+
+        local plantToDelete = EventsManager.EasterAngryPlant.GetPlantToShovel()
+        if plantToDelete == nil then
+            return false
+        end
+
+        local ls = ShovelManager.Plant.GetPlantsToDestroyByName(plantToDelete)
+
+        if #ls == 0 then
+            return false
+        end
+
+        Varz.IS_HATCHING = true
+        task.wait(2)
+        local shovel = InventoryManager.GetShovel()
+        if shovel then
+            unequipTools()
+            EquipToolOnChar(shovel)
+            task.wait(0.1)
+        else
+            Varz.IS_HATCHING = false
+            return false
+        end
+
+        for _, item in ipairs(ls) do
+            ShovelManager.Plant.DeletePlant(item)
+            Library:Notify("Deleted plant " .. item.Name .. " for Evil Bunny Event!")
+            task.wait(3)
+            unequipTools()
+            break
+        end
+
+        Varz.IS_HATCHING = false
+    end,
+
     GetCurrentRequiredPlant  = function()
         -- Fetching the data using the specific key from your image
         local eventData = VulnManager.GetBigDataUsingKey("EasterEventData")
@@ -17110,7 +17375,7 @@ EventsManager.EasterAngryPlant = {
         local goldenEggBuyAmount = eventData.GoldenEgg and eventData.GoldenEgg.BuyAmount or 0
         --local goldenEggLastBuyTime = eventData.GoldenEgg and eventData.GoldenEgg.LastBuyTime
 
-        if goldenEggBuyAmount < 12 then
+        if goldenEggBuyAmount < 16 then
             game:GetService("ReplicatedStorage").GameEvents.EasterEvent.TryBuyGoldenEggRE:FireServer()
         end
     end,
@@ -17131,6 +17396,8 @@ EventsManager.EasterAngryPlant = {
                 end
 
                 EventsManager.EasterAngryPlant.BuyEggs()
+
+                EventsManager.EasterAngryPlant.ShovelEvilBunnyPlant()
 
 
                 local pos = EventsManager.EasterEvent.GetEasterSeedPlacementPoint()
@@ -17174,14 +17441,18 @@ EventsManager.EasterAngryPlant = {
                     -- print("# Dont Have item for angry plant ", plantName, weight)
                     -- enforce collection or plant
 
+                    local shouldcollect = false
+
                     local plants_singles = {
                         ["Easter Liquorice"] = true,
                         ["Easter Candy Carrot"] = true,
                     }
                     local count = 0
+                    local min_required = 0
 
                     if plants_singles[plantName] then
                         count = FarmManager.GetPlantCountBySeedAndWeightMutations(plantName, weight)
+                        min_required = 3
                     else
                         count = FarmManager.GetPlantCountBySeed(plantName)
                     end
@@ -17190,9 +17461,12 @@ EventsManager.EasterAngryPlant = {
                         continue
                     end
 
-                    if count <= 0 then
+                    local item_amount = InventoryManager.GetSeedCountUsingName(plantName)
+
+
+                    if count <= min_required then
                         -- print("Dont have this plant ", plantName)
-                        local amountp = 2
+                        local amountp = 9
 
                         Varz.IS_SEEDING = true
                         task.wait(1)
@@ -17226,6 +17500,11 @@ EventsManager.EasterAngryPlant = {
                         _FruitCollectorMachine.PlaceSeedSmart(plantName, amountp, pos)
                         Varz.IS_SEEDING = false
                     else
+                        shouldcollect = true
+                    end
+
+
+                    if shouldcollect then
                         -- we have these plants. harvest for angry plants
                         -- find and collect fruit with mutation , weight and name
                         --print("Collect plant for angry plant ", plantName)
@@ -17635,6 +17914,10 @@ EventsManager.EasterEvent = {
             return
         end
 
+        if Varz.IS_SEEDING then
+            return
+        end
+
 
         local easterPlants = {
             -- ["Chocolate Carrot"] = true,
@@ -17685,6 +17968,11 @@ EventsManager.EasterEvent = {
                 local count = FarmManager.GetPlantCountBySeed(seedname)
                 if count >= max_allowed then
                     continue
+                end
+                if seedname == "Easter Liquorice" then
+                    if count >= 3 then
+                        continue
+                    end
                 end
             end
 
@@ -35151,7 +35439,7 @@ local function MEventsUi()
     -- Groups
     --local eventJungle = UIEventsTab:AddLeftGroupbox("🌴 <font color='#228B22'>Jungle Event</font> 🍂", "tree")
 
-    local gFeedEvent = UIEventsTab:AddLeftGroupbox("🤖 Easter Garden Pets", "tasks")
+    local gFeedEvent = nil -- UIEventsTab:AddLeftGroupbox("🤖 Easter Garden Pets", "tasks")
 
     local gFallEvent = UIEventsTab:AddLeftGroupbox(type_fruit_event_name, "snowflake")
     local gQuest = UIEventsTab:AddLeftGroupbox("🍂 <font color='#FFD700'>Quests</font> 🌽", "tasks")
@@ -36167,6 +36455,19 @@ local function MEventsUi()
         -- gFallEvent:AddDivider()
         -- Enable or disable Fall market event
 
+
+        gFallEvent:AddToggle("autobuyeggseasteriseaster_bunnyevil", {
+            Text = "⚡ <font color='#DB0066'>Evil</font> Bunny Event",
+            Default = FOtherSettings.iseaster_bunnyevil,
+            Tooltip = "Evil Easter Bunny event, Auto shovels required plants.",
+            Callback = function(Value)
+                FOtherSettings.iseaster_bunnyevil = Value
+                SaveDataOther()
+            end
+        })
+
+        gFallEvent:AddDivider()
+
         gFallEvent:AddToggle("autoangryplant", {
             Text = "🐉 <font color='#DB00D4'>Auto Angry Plant</font>",
             Default = FOtherSettings.eventangry_plant_auto,
@@ -36655,8 +36956,254 @@ local function UiPetsSideTab()
 
     local pandaUi = PetsTab:AddLeftGroupbox("Red Panda", "panda")
 
+    local unfavPets = PetsTab:AddLeftGroupbox("Favorite Pets", "panda")
+
 
     local easterbunnyUi = PetsTab:AddLeftGroupbox("Easter Bunny", "bone")
+
+
+
+
+
+    -- #unfav
+    if unfavPets then
+        --  pets
+        local dd_giftpets_allowlist = unfavPets:AddDropdown("dd_giftpets_allowlistpetfav", {
+            Values = {},
+            Default = {},
+            Multi = true,
+            Text = "🦖 Pets",
+            Searchable = true,
+            MaxVisibleDropdownItems = 10,
+            Changed = function(newSelection)
+                if not newSelection then return end
+                FSettings.petfav.allow_pet_list = newSelection
+                SaveData()
+            end
+        })
+
+        -- Populate dropdown with all pet names
+        dd_giftpets_allowlist:SetValues(Varz.all_pets_names_list)
+        dd_giftpets_allowlist:SetValue(FSettings.petfav.allow_pet_list)
+
+        -- Select all or none for this
+        local btn_selectall = unfavPets:AddButton({
+            Text = "Select All",
+            Func = function()
+                FSettings.petfav.allow_pet_list = {}
+                for index, value in ipairs(Varz.all_pets_names_list) do
+                    FSettings.petfav.allow_pet_list[value] = true
+                end
+                dd_giftpets_allowlist:SetValue(FSettings.petfav.allow_pet_list)
+                SaveData()
+            end,
+        })
+
+        btn_selectall:AddButton({
+            Text = "<font color='#FF3D17'>Remove All</font>",
+            Func = function()
+                FSettings.petfav.allow_pet_list = {}
+                dd_giftpets_allowlist:SetValue(FSettings.petfav.allow_pet_list)
+                SaveData()
+            end,
+        })
+
+        ----============================ Mutations #giftmut
+
+
+        local dd_giftpet_mut = unfavPets:AddDropdown("dd_giftpet_mutpetfav", {
+            Values = {},
+            Default = {},
+            Multi = true,
+            Searchable = true,
+            MaxVisibleDropdownItems = 10,
+            Text = "🧬 Mutations",
+            Callback = function(Values)
+                if Values == nil then
+                    return
+                end
+                FSettings.petfav.allow_mutation_list = Values
+                SaveData()
+            end
+        })
+        -- setup values
+        dd_giftpet_mut:SetValues(GetKeyMutListUsingDir(MutationMachineManager.AllMutationsList))
+        dd_giftpet_mut:SetValue(FSettings.petfav.allow_mutation_list)
+
+
+
+        --========= Level
+        local GetMinLevelTextPetGift = function()
+            local stx = string.format("Min Level <font color='#47FF40'>%s</font>", FSettings.petfav.min_age)
+            return stx
+        end
+
+        local GetMaxLevelTextPetGift = function()
+            local stx = string.format("Max Level <font color='#FF4065'>%s</font>", FSettings.petfav.max_age)
+            return stx
+        end
+        local input_min_age
+        input_min_age = unfavPets:AddInput("input_min_agepetfav", {
+            Text = GetMinLevelTextPetGift(),
+            Default = FSettings.petfav.min_age,
+            Numeric = true,
+            AllowEmpty = true,
+            Finished = true,
+            ClearTextOnFocus = false,
+            Placeholder = "e.g 1",
+            Tooltip = "Specify minimum Pet Age",
+            Callback = function(Value)
+                local num = ParseWholeNumber(Value)
+
+                if not num or num <= 0 then
+                    Library:Notify("Invalid: " .. Value, 3)
+                    input_min_age:SetValue(tostring(FSettings.petfav.min_age))
+                    return
+                end
+
+                if num > FSettings.petfav.max_age then
+                    Library:Notify("Can't be more than max age ", 3)
+                    input_min_age:SetValue(tostring(FSettings.petfav.min_age))
+                    return
+                end
+
+                FSettings.petfav.min_age = num
+                SaveData()
+                input_min_age:SetText(GetMinLevelTextPetGift())
+            end
+        })
+        local input_max_age
+        input_max_age = unfavPets:AddInput("input_max_agepetfav", {
+            Text = GetMaxLevelTextPetGift(),
+            Default = FSettings.petfav.max_age,
+            Numeric = true,
+            AllowEmpty = true,
+            Finished = true,
+            ClearTextOnFocus = false,
+            Placeholder = "e.g 1",
+            Tooltip = "Specify maximum Pet Age",
+            Callback = function(Value)
+                local num = ParseWholeNumber(Value)
+
+                if not num or num <= 0 then
+                    Library:Notify("Invalid: " .. Value, 3)
+                    input_max_age:SetValue(tostring(FSettings.petfav.max_age))
+                    return
+                end
+
+
+                if num < FSettings.petfav.min_age then
+                    Library:Notify("Can't be lower than min age ", 3)
+                    input_max_age:SetValue(tostring(FSettings.petfav.max_age))
+                    return
+                end
+
+                FSettings.petfav.max_age = num
+                SaveData()
+                input_max_age:SetText(GetMaxLevelTextPetGift())
+            end
+        })
+
+
+        --========= Weight
+        local GetMinWTextPetGift = function()
+            local stx = string.format("Min BaseWeight <font color='#47FF40'>%s</font>", FSettings.petfav.min_weight)
+            return stx
+        end
+
+        local GetMaxWTextPetGift = function()
+            local stx = string.format("Max BaseWeight <font color='#FF4065'>%s</font>", FSettings.petfav.max_weight)
+            return stx
+        end
+        local input_min_weight
+        input_min_weight = unfavPets:AddInput("input_min_weightpetfav", {
+            Text = GetMinWTextPetGift(),
+            Default = FSettings.petfav.min_weight,
+            Numeric = true,
+            AllowEmpty = true,
+            Finished = true,
+            ClearTextOnFocus = false,
+            Placeholder = "e.g 1",
+            Tooltip = "Specify minimum Pet BaseWeight",
+            Callback = function(Value)
+                local num = ParseWeightNumber(Value)
+
+                if not num or num <= 0 then
+                    Library:Notify("Invalid: " .. Value, 3)
+                    input_min_weight:SetValue(tostring(FSettings.petfav.min_weight))
+                    return
+                end
+
+                if num > FSettings.petfav.max_weight then
+                    Library:Notify("Can't be more than max weight", 3)
+                    input_min_weight:SetValue(tostring(FSettings.petfav.min_weight))
+                    return
+                end
+
+                FSettings.petfav.min_weight = num
+                SaveData()
+                input_min_weight:SetText(GetMinWTextPetGift())
+            end
+        })
+
+        local input_max_weight
+        input_max_weight = unfavPets:AddInput("input_max_weightpetfav", {
+            Text = GetMaxWTextPetGift(),
+            Default = FSettings.petfav.max_weight,
+            Numeric = true,
+            AllowEmpty = true,
+            Finished = true,
+            ClearTextOnFocus = false,
+            Placeholder = "e.g 1",
+            Tooltip = "Specify maximum BaseWeight",
+            Callback = function(Value)
+                local num = ParseWeightNumber(Value)
+
+                if not num or num <= 0 then
+                    Library:Notify("Invalid: " .. Value, 3)
+                    input_max_weight:SetValue(tostring(FSettings.petfav.max_weight))
+                    return
+                end
+
+
+                if num < FSettings.petfav.min_weight then
+                    Library:Notify("Can't be lower than min weight ", 3)
+                    input_max_weight:SetValue(tostring(FSettings.petfav.max_weight))
+                    return
+                end
+
+                FSettings.petfav.max_weight = num
+                SaveData()
+                input_max_weight:SetText(GetMaxWTextPetGift())
+            end
+        })
+
+
+
+        unfavPets:AddButton({
+            Text = "❤️ Fav Pets",
+            Func = function()
+                TaskManager.FavouritePets.FavAllPets()
+            end,
+        })
+
+        unfavPets:AddButton({
+            Text = "❌ Unfav Pets",
+            Func = function()
+                TaskManager.FavouritePets.UnFavAllPets()
+            end,
+        })
+
+
+        unfavPets:AddDivider()
+        unfavPets:AddDivider()
+        unfavPets:AddDivider()
+    end
+
+
+
+
+
 
     local petEleGroup = nil
 
@@ -36676,6 +37223,15 @@ local function UiPetsSideTab()
         petEleGroup = PetsTab:AddRightGroupbox(
             "<font color='#FF0062'>Elephant </font><font color='#00FFFF'>Boost</font>", "sunrise")
     end
+
+
+
+
+
+
+
+
+
 
     ---========= Elephant boost #eleui
     if petEleGroup then
@@ -40657,6 +41213,7 @@ TaskManager.task_auto_shovel_sprinkler = task.spawn(function()
 end)
 
 
+-- #sprinkler #place
 task.spawn(function()
     while true do
         task.wait(2)
