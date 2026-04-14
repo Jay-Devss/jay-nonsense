@@ -217,7 +217,7 @@ end
 
 -- #start
 _S.AppName = "Exotic Hub"
-_S.CurentV = "v1.40.0"
+_S.CurentV = "v1.40.9"
 
 local Varz = {}
 Varz.dev_tools = true
@@ -462,7 +462,10 @@ end
 
 -- save for mutations and others
 local FOtherSettings = {
-
+    autofavfruits_enabled                      = false,
+    autofavminweight                           = 70,
+    autofavmaxweight                           = 500,
+    autofavplantlist                           = {},
     enhance_cooldown                           = 0.35,
     swap_enchancer                             = false,
     egg_override                               = {},
@@ -563,6 +566,7 @@ local FOtherSettings = {
     eventangry_plant_auto                      = true,
     autoplacechocolatesprinkler                = true,
     autobuyeggs_event                          = true,
+    autobuyeventeggsamount                     = 19,
     iseaster_bunnyevil                         = false,
     autoplacesprinklers                        = {},
     enable_autoplacesprinklers                 = false,
@@ -1404,6 +1408,7 @@ Varz.IS_MUTATION_RUNNING = false
 Varz.IS_PET_MUTATION_RUNNING = false
 Varz.IS_DIG = false
 Varz.IS_PACKOPEN = false
+Varz.IS_EVENT_TASK = false
 
 Varz.BigData = {}
 
@@ -3945,7 +3950,29 @@ FarmManager.GetAllPlantsObjectUsingName = function(seedName)
             -- if not _FruitCollectorMachine.IsFruitReadyToCollect(child) then
             --     continue
             -- end
-            if child.Name == seedName then
+            if child.Name ~= seedName then continue end
+
+            local potentialFruits = {}
+            local fruitsFolder    = child:FindFirstChild("Fruits")
+
+            if fruitsFolder and #fruitsFolder:GetChildren() > 0 then
+                for _, fruitx in ipairs(fruitsFolder:GetChildren()) do
+                    table.insert(potentialFruits, fruitx)
+                end
+            else
+                table.insert(potentialFruits, child)
+            end
+
+            local collectf = true
+
+            for index, value in ipairs(potentialFruits) do
+                if _FruitCollectorMachine.IsFavoriteFruitOnFarm(value) then
+                    collectf = false
+                    break
+                end
+            end
+
+            if collectf then
                 table.insert(plantls, child)
             end
         end
@@ -6245,6 +6272,7 @@ InventoryManager.GetBonfire = function()
     return nil
 end
 
+
 InventoryManager.GetShovel = function()
     local succ, res = pcall(function()
         local _name = "Shovel [Destroy Plants]"
@@ -6292,6 +6320,40 @@ InventoryManager.GetShovel = function()
     end
 
     return res
+end
+
+InventoryManager.GetFavouriteTool = function()
+    local TARGET_NAME = "Favorite Tool"
+
+    -- Helper function to validate if an instance matches our criteria
+    local function isTargetTool(item)
+        if not item:IsA("Tool") then return false end
+        if item:GetAttribute("b") ~= "h" then return false end
+
+        -- Returns true if TARGET_NAME is found in the item's name
+        return string.find(item.Name, TARGET_NAME, 1, true) ~= nil
+    end
+
+    -- 1. Check Backpack (Unequipped)
+    if _S.Backpack then
+        for _, item in ipairs(_S.Backpack:GetChildren()) do
+            if isTargetTool(item) then
+                return item
+            end
+        end
+    end
+
+    -- 2. Check Character (Equipped)
+    local char = _S.Character
+    if char and char:IsA("Model") then
+        for _, item in ipairs(char:GetChildren()) do
+            if isTargetTool(item) then
+                return item
+            end
+        end
+    end
+
+    return nil
 end
 
 InventoryManager.GetLightningRod = function()
@@ -8007,85 +8069,48 @@ _FruitCollectorMachine.GetPlantPosition = function(_fruit)
 end
 
 _FruitCollectorMachine.IsFruitGrown = function(_fruit)
-    -- Check to see if this fruit is ready for collection or is it still growing.
-    if not _fruit then
+    -- 1. Ensure _fruit exists and is a valid Instance
+    if typeof(_fruit) ~= "Instance" then
         return false
     end
-
-    local maxAge = _fruit:GetAttribute("MaxAge")
-
-
-    local current_age = 0
-    local xsuccess1, p_age = pcall(function()
-        return tonumber(_fruit.Grow.Age.Value)
-    end)
-
-    if not xsuccess1 or not maxAge or not p_age then
-        return false
-    else
-        current_age = p_age
-    end
-
-    local xxsuccess, promptEnabled = pcall(function()
-        local prompt = _fruit:FindFirstChildWhichIsA("ProximityPrompt", true)
-        return prompt and prompt.Enabled
-    end)
-
-    if xxsuccess and promptEnabled then
-        --print("Prompt is enabled ✅")
-        return true
-    elseif xxsuccess and not promptEnabled then
-        --print("Prompt is disabled ❌")
-        return false
-    else
-        --warn("Error checking prompt:", promptEnabled) -- promptEnabled holds the error msg if pcall fails
-    end
-
-    if current_age >= maxAge then
-        return true
-    end
-
-    return false
+    -- 2. Look for the ProximityPrompt
+    local prompt = _fruit:FindFirstChildWhichIsA("ProximityPrompt", true)
+    -- 3. Return true only if it exists AND is enabled
+    return prompt ~= nil and prompt.Enabled == true
 end
 
 _FruitCollectorMachine.GetFruitVariant = function(_fruit)
-    local successv, varresult = pcall(function()
-        return _fruit.Variant.Value
-    end)
-
-    local Variant = "Normal"
-    if successv then
-        Variant = varresult
+    if typeof(_fruit) ~= "Instance" then
+        return "Normal"
     end
-
-    return Variant
+    local variantObj = _fruit:FindFirstChild("Variant")
+    if variantObj and variantObj:IsA("ValueBase") then
+        return variantObj.Value
+    end
+    return "Normal"
 end
 
 
 _FruitCollectorMachine.GetFruitWeight = function(_fruit)
-    local successv, varresult = pcall(function()
-        return _fruit.Weight.Value
-    end)
-
-    local vv = 0
-    if successv then
-        vv = varresult
+    if typeof(_fruit) ~= "Instance" then
+        return 0
     end
-
-    return vv
+    local weightObj = _fruit:FindFirstChild("Weight")
+    if weightObj and weightObj:IsA("ValueBase") then
+        return weightObj.Value
+    end
+    return 0
 end
 
 _FruitCollectorMachine.GetFruitItemSeed = function(_fruit)
-    local successv, varresult = pcall(function()
-        return _fruit.Item_Seed.Value
-    end)
-
-    local vv = 0
-    if successv then
-        vv = varresult
+    if typeof(_fruit) ~= "Instance" then
+        return 0
     end
-
-    return vv
+    local seedObj = _fruit:FindFirstChild("Item_Seed")
+    if seedObj and seedObj:IsA("ValueBase") then
+        return seedObj.Value
+    end
+    return 0
 end
 
 _FruitCollectorMachine.GetFruitMutationsVariantAndWeight = function(_fruit)
@@ -8123,6 +8148,19 @@ _FruitCollectorMachine.GetFruitMutationsVariantAndWeight = function(_fruit)
 
     -- Always returns: number, table, table
     return true, fruit_weight, mutations, variantsMap
+end
+
+_FruitCollectorMachine.IsFavoriteFruitOnFarm = function(_fruit)
+    if not _fruit then
+        return false
+    end
+
+    local is_fav = _fruit:GetAttribute("Favorited")
+
+    if is_fav and is_fav == true then
+        return true
+    end
+    return false
 end
 
 _FruitCollectorMachine.IsFruitReadyToCollect = function(_fruit, bypassready)
@@ -8634,7 +8672,9 @@ _FruitCollectorMachine.GetFruitObjectsSortedRarityConfig = function(config)
                 continue
             end
 
-
+            if TaskManager.FavouriteFruit.IsFavouriteTarget(fruit) then
+                continue
+            end
 
 
             if max_mutation_number > 0 then
@@ -8755,6 +8795,10 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNa
                 continue
             end
 
+            if TaskManager.FavouriteFruit.IsFavouriteTarget(fruit) then
+                continue
+            end
+
 
 
 
@@ -8763,24 +8807,15 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarityConfig = function(_fruitNa
                 fruit)
             if is_valid then
                 -- Check the easter event #easter
-                if not alreadyCheckedEaster[plantName] then
-                    local success1, res1 = pcall(function()
-                        return EventsManager.EasterAngryPlant.SkipPlantEaster(plantName, weight, mutations, variantsx)
-                    end)
 
-                    if not success1 then
-                        warn("Error:", res1)
-                    else
-                        if res1 == true then
-                            -- print("Required by easter angry plant! ", plantName, weight)
-                            alreadyCheckedEaster[plantName] = true
-                            continue
-                        end
-                    end
-                end
+                -- Easter Event Protection (Uses the optimized filter we built)
+                local shouldKeepForEaster = false
+                pcall(function()
+                    shouldKeepForEaster = EventsManager.EasterAngryPlant.SkipPlantEaster(plantName, weight, mutations,
+                        variantsx)
+                end)
+                if shouldKeepForEaster then continue end
             end
-
-
 
             if max_mutation_number > 0 then
                 if not _FruitCollectorMachine.CountMutationOnFruit(fruit, max_mutation_number) then
@@ -8938,6 +8973,10 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarity = function(_fruitNames, _
                 continue
             end
 
+            if TaskManager.FavouriteFruit.IsFavouriteTarget(fruit) then
+                continue
+            end
+
             -- **KEY CHANGE**: Store the fruit object AND its plant name for sorting
             table.insert(allValidFruits, { FruitObject = fruit, PlantName = plantName })
         end
@@ -9038,36 +9077,27 @@ _FruitCollectorMachine.CollectFruitByNamesSortedRarity = function(_fruitNames, _
     return false
 end
 
-_FruitCollectorMachine.CollectFruitByNameAndMutationAndWeight = function(fruitName, _amount, pweight, mutations,
+
+_FruitCollectorMachine.CollectFruitByNameAndMutationAndWeight = function(fruitName, _amount, pweight, requiredMutations,
                                                                          forceCollect)
-    -- Collects fruits. key/val table passed in
     local fruitsToCollect = {}
     local MAX_PER_COLLECTION = _amount or 1
 
-    local _HasMut = function(fruit)
-        if next(mutations) == nil then
-            return true
-        end
-        for key, value in pairs(mutations) do
-            if fruit:GetAttribute(key) then
-                return true
-            end
-        end
-        return false
-    end
+    -- Safe fallback in case caller passes nil
+    requiredMutations = requiredMutations or {}
 
     for _, plantModel in ipairs(FarmManager.Get_Plants_Physical_Objects()) do
         if not plantModel:IsA("Model") then continue end
-        if not plantModel.Name then continue end
-        if fruitName ~= plantModel.Name then
-            continue
-        end
+
+        local plantName = plantModel.Name
+        if not plantName or plantName ~= fruitName then continue end
 
         local potentialFruits = {}
-        local fruitsFolder    = plantModel:FindFirstChild("Fruits")
+        local fruitsFolder = plantModel:FindFirstChild("Fruits")
 
+        -- RESTORED FIX: If it's a multi-harvest plant, get the fruits.
+        -- If it's a single-harvest plant, the plantModel IS the fruit.
         if fruitsFolder and #fruitsFolder:GetChildren() > 0 then
-            -- check if this actually has fruits inside because only multi harvest will have fruits inside.
             for _, fruitx in ipairs(fruitsFolder:GetChildren()) do
                 table.insert(potentialFruits, fruitx)
             end
@@ -9075,60 +9105,74 @@ _FruitCollectorMachine.CollectFruitByNameAndMutationAndWeight = function(fruitNa
             table.insert(potentialFruits, plantModel)
         end
 
-        -- Process any fruits found
+        -- Process fruits (or the plant itself)
         for _, fruit in ipairs(potentialFruits) do
-            if #fruitsToCollect >= MAX_PER_COLLECTION then
-                break
-            end
+            if #fruitsToCollect >= MAX_PER_COLLECTION then break end
 
-            if not _FruitCollectorMachine.IsFruitReadyToCollect(fruit) then
+            if not _FruitCollectorMachine.IsFruitReadyToCollect(fruit) then continue end
+
+            if TaskManager.FavouriteFruit.IsFavouriteTarget(fruit) then
                 continue
             end
 
+            local is_valid, weight, f_mutations, f_variants = _FruitCollectorMachine.GetFruitMutationsVariantAndWeight(
+                fruit)
+            if not is_valid then continue end
+
             if not forceCollect then
-                local is_valid, weight, mutations, variants = _FruitCollectorMachine.GetFruitMutationsVariantAndWeight(
-                    fruit)
+                -- Normal Mode: Must match weight
+                if weight < pweight then continue end
 
-                local hasmut = _HasMut(fruit)
-
-                if next(mutations) == nil then
-                    hasmut = true
-                end
-
-                if weight >= pweight and hasmut then
-                    table.insert(fruitsToCollect, fruit)
-                end
-            else
-                -- only harvest if it matches no weight requirements
-
-                local is_valid, weight, mutations, variantsx = _FruitCollectorMachine.GetFruitMutationsVariantAndWeight(
-                    fruit)
-                if is_valid then
-                    -- Check the easter event #easter
-                    if EventsManager.EasterAngryPlant.SkipPlantEaster(fruit.Name, weight, mutations, variantsx) then
-                        continue
+                -- Check Mutations
+                local hasRequiredMut = true
+                if next(requiredMutations) ~= nil then
+                    hasRequiredMut = false
+                    for req_mut, _ in pairs(requiredMutations) do
+                        -- Safely check the attribute on either the fruit part or the plant model
+                        if fruit:GetAttribute(req_mut) then
+                            hasRequiredMut = true
+                            break
+                        end
                     end
                 end
 
-                table.insert(fruitsToCollect, fruit)
+                if hasRequiredMut then
+                    table.insert(fruitsToCollect, fruit)
+                end
+            else
+                -- Force Collect Mode: Spare it only if Easter needs it
+                local shouldKeepForEaster = false
+                pcall(function()
+                    shouldKeepForEaster = EventsManager.EasterAngryPlant.SkipPlantEaster(plantName, weight,
+                        f_mutations,
+                        f_variants)
+                end)
+
+                if not shouldKeepForEaster then
+                    table.insert(fruitsToCollect, fruit)
+                end
             end
         end
+
+        -- Efficiency Break: Stop scanning the farm if we hit our quota
+        if #fruitsToCollect >= MAX_PER_COLLECTION then break end
     end
 
+    -- Execute Collection
     if #fruitsToCollect > 0 then
-        --warn("fruitsToCollect --- ")
-        --_S.collectEvent:FireServer(fruitsToCollect)
         local collectedfruits = 0
         for _, fruitx in ipairs(fruitsToCollect) do
+            -- Safety check so we don't spam the server if inventory is full
+            if Varz.backpack_full then break end
+
             _S.collectEvent:FireServer({ fruitx })
             collectedfruits = collectedfruits + 1
             task.wait(0.1)
         end
 
-        if collectedfruits > 0 then
-            return true
-        end
+        return collectedfruits > 0
     end
+
     return false
 end
 
@@ -9164,6 +9208,10 @@ _FruitCollectorMachine.CollectFruitByNames = function(_fruitNames, _amount)
             end
 
             if not _FruitCollectorMachine.IsFruitReadyToCollect(fruit) then
+                continue
+            end
+
+            if TaskManager.FavouriteFruit.IsFavouriteTarget(fruit) then
                 continue
             end
             local isPreventAsen1 = IsPreventAscensionFruitRequirement(fruit)
@@ -9315,6 +9363,10 @@ _FruitCollectorMachine.GetRandomFruitsIgnoreMutation = function(requireMut)
                 continue
             end
 
+            if TaskManager.FavouriteFruit.IsFavouriteTarget(fruit) then
+                continue
+            end
+
             if _HasMut(fruit) then
                 continue
             end
@@ -9373,6 +9425,10 @@ _FruitCollectorMachine.GetRandomFruitsWithMutation = function(requireMut)
         -- Process any fruits found
         for _, fruit in ipairs(potentialFruits) do
             if not _FruitCollectorMachine.IsFruitReadyToCollect(fruit) then
+                continue
+            end
+
+            if TaskManager.FavouriteFruit.IsFavouriteTarget(fruit) then
                 continue
             end
 
@@ -9440,6 +9496,10 @@ _FruitCollectorMachine.GetFruitsUsingNameAndMutation = function(_fname, requireM
                 continue
             end
 
+            if TaskManager.FavouriteFruit.IsFavouriteTarget(fruit) then
+                continue
+            end
+
             if _fname ~= fruit.Name then
                 continue
             end
@@ -9448,11 +9508,6 @@ _FruitCollectorMachine.GetFruitsUsingNameAndMutation = function(_fname, requireM
                 continue
             end
 
-
-            -- local shouldCollect = _FruitCollectorMachine.CheckMutationWhiteBlackList(fruit)
-            -- if not shouldCollect then
-            --     continue
-            -- end
 
             local isPreventAsen1 = IsPreventAscensionFruitRequirement(fruit)
 
@@ -9468,6 +9523,63 @@ _FruitCollectorMachine.GetFruitsUsingNameAndMutation = function(_fname, requireM
     end
 
     return fruitsToCollect
+end
+
+-- #fruit
+_FruitCollectorMachine.GetAllFruitsInFarmReady = function(requirePlants, min_weight, max_weight)
+    local fruitsToCollect = {}
+    local fav_fruits = {}
+
+    local filterPlants = type(requirePlants) == "table" and requirePlants or {}
+
+    local has_filter = next(filterPlants) ~= nil
+
+    -- Helper function to process and sort a single item
+    local function sortFruit(item)
+        if not _FruitCollectorMachine.IsFruitGrown(item) then return end
+
+        -- Check weight
+        local plantWeight = _FruitCollectorMachine.GetFruitWeight(item)
+
+        if min_weight and plantWeight < min_weight then
+            return -- Too light, skip it
+        end
+
+        if max_weight and plantWeight > max_weight then
+            return -- Too heavy, skip it
+        end
+
+        -- if user has sent min and max weight then check them
+
+        if _FruitCollectorMachine.IsFavoriteFruitOnFarm(item) then
+            table.insert(fav_fruits, item)
+        else
+            table.insert(fruitsToCollect, item)
+        end
+    end
+
+    for _, plantModel in ipairs(FarmManager.Get_Plants_Physical_Objects()) do
+        if has_filter and not filterPlants[plantModel.Name] then
+            continue
+        end
+
+        local fruitsFolder = plantModel:FindFirstChild("Fruits")
+
+        -- Get children once. If fruitsFolder is nil, default to an empty table.
+        local fruits = fruitsFolder and fruitsFolder:GetChildren() or {}
+
+        if #fruits > 0 then
+            -- Process actual fruits in the folder
+            for _, fruit in ipairs(fruits) do
+                sortFruit(fruit)
+            end
+        else
+            -- If no fruits folder or it's empty, treat the plantModel itself as the fruit
+            sortFruit(plantModel)
+        end
+    end
+
+    return fruitsToCollect, fav_fruits
 end
 
 
@@ -10140,6 +10252,128 @@ ShovelManager.Plant = {
         end
         return _data
     end,
+    PlantShovelTask = function()
+        -- 1. Global State Checks
+        if TaskManager.Is_MasterBusy() then
+            return false
+        end
+
+        -- 3. Initial Load for Shovel Manager
+        if not ShovelManager.isLoaded then
+            ShovelManager.UpdateCurrentPlantsInFarm()
+            task.wait(1)
+            if UI_Dropdown.ShovelDropDown then
+                UI_Dropdown.ShovelDropDown:SetText("⛏️ Plants to Shovel")
+            end
+            ShovelManager.isLoaded = true
+        end
+
+        -- 4. User Settings Check
+        if not FOtherSettings.is_auto_shovel then
+            if not ShovelManager.IsActive then
+                ShovelManager.UpdateStatus("🔴 Auto-Shovel Disabled")
+                return false
+            else
+                ShovelManager.UpdateStatus("🟡 Auto-Shovel Running (Manual)")
+            end
+        else
+            ShovelManager.UpdateStatus("🟢 Auto-Shovel Running (Auto)")
+        end
+
+        -- 5. Calculate Plants to Delete
+        local del_plants = ShovelManager.Plant.GetPlantsToDestroy()
+        if #del_plants <= 0 then
+            ShovelManager.UpdateStatus("🔴 Nothing to shovel")
+            return false
+        end
+
+        ShovelManager.UpdateStatus("🟢 Active and running...")
+
+        local plant_count = FarmManager.GetPlantCountByNameArrayTable(del_plants)
+        local max_keep = tonumber(FOtherSettings.shovel_keep_amount) or 0 -- Added tonumber fallback
+
+        local plants_under_limit = ""
+        local allowed_del = {}
+        local not_allow = {}
+
+        -- Build lists based on current counts
+        for _, plantx in ipairs(del_plants) do
+            if plant_count[plantx.Name] ~= nil then
+                if plant_count[plantx.Name] > max_keep then
+                    table.insert(allowed_del, plantx)
+                else
+                    not_allow[plantx.Name] = true
+                end
+            end
+        end
+
+        for _itemname, _ in pairs(not_allow) do
+            plants_under_limit = plants_under_limit .. " " .. _itemname .. " under-limit[Skipped]\n"
+        end
+
+        -- 6. Stop if nothing is above the limit
+        if #allowed_del == 0 then
+            if not FOtherSettings.is_auto_shovel then
+                ShovelManager.UpdateStatus("🔴 Cannot delete any plants. Stopping... " .. plants_under_limit)
+                ShovelManager.IsActive = false
+                Library:Notify("Shovel Stopped", 1)
+            else
+                ShovelManager.UpdateStatus("🔴 Nothing to delete. " .. plants_under_limit)
+            end
+            return false
+        end
+
+        -- 7. Execute Deletion
+        local tool = InventoryManager.GetShovel()
+        if not tool then return false end -- Safety check
+
+        unequipTools()
+        EquipToolOnChar(tool)
+        task.wait(0.3)
+
+        ShovelManager.UpdateStatus("🟡 Removing plants from your farm...")
+
+        ShovelManager.IsActive = true
+
+        for _, plant in ipairs(allowed_del) do
+            -- Master Loop Interrupts: Break out instead of pausing infinitely
+            if not ShovelManager.IsActive then break end
+
+            if TaskManager.Is_MasterBusy() then
+                ShovelManager.UpdateStatus("🟡 Yielding to higher priority tasks...")
+                break
+            end
+
+            max_keep = tonumber(FOtherSettings.shovel_keep_amount) or 0
+
+            if not IsToolHeldNew(tool) then
+                unequipTools()
+                EquipToolOnChar(tool)
+                task.wait(0.5)
+            end
+
+            if plant_count[plant.Name] ~= nil then
+                if plant_count[plant.Name] <= max_keep then
+                    ShovelManager.UpdateProgressInformation(plant_count)
+                    continue
+                end
+
+                -- Destroy it
+                ShovelManager.Plant.DeletePlant(plant)
+                plant_count[plant.Name] = plant_count[plant.Name] - 1
+                ShovelManager.UpdateProgressInformation(plant_count)
+                task.wait(0.7)
+            end
+        end
+
+        -- 8. Cleanup
+        ShovelManager.IsActive = false
+
+        unequipTools()
+        ShovelManager.UpdateStatus("🟢 Shovelling Complete")
+
+        return true
+    end
 }
 
 
@@ -10255,7 +10489,24 @@ ShovelManager.Fruit = {
         return success
     end,
     DoFruitsDeleteTask = function()
+        if TaskManager.Is_MasterBusy() then
+            return false
+        end
+
         local success, fail = pcall(function()
+            if not ShovelManager.Fruit.IsEnabled() then
+                ShovelManager.Fruit.UpdateStatusFruit("🔴 Not enabled")
+                return false
+            end
+
+            ShovelManager.Fruit.UpdateStatusFruit("🟢 Active and running.")
+            if ShovelManager.Fruit.IsBusy() then
+                ShovelManager.Fruit.UpdateStatusFruit("🟡 Other tasks in progress.")
+                return false
+            end
+
+            ShovelManager.Fruit.UpdateStatusFruit("🚨 Trying to find and delete.")
+
             if next(FOtherSettings.rmplants.fruit_list) == nil then
                 ShovelManager.Fruit.UpdateStatusFruit("❌ Please select fruit types to remove.")
                 return false
@@ -10287,12 +10538,20 @@ ShovelManager.Fruit = {
                 local current_del = 0
 
                 for index, value in ipairs(found_fruits) do
-                    if not ShovelManager.Fruit.IsEnabled() then break end
-                    --if ShovelManager.Fruit.IsBusy() then break end
+                    if not ShovelManager.Fruit.IsEnabled() then
+                        break
+                    end
+
+                    if TaskManager.Is_MasterBusy() then
+                        break
+                    end
                     if current_del >= 30 then
                         break
                     end
                     local ProximityPrompt = value:FindFirstChild("ProximityPrompt", true)
+                    if not ProximityPrompt then
+                        continue
+                    end
                     local _object = ProximityPrompt.Parent
                     if not _object then continue end
                     ShovelManager.Fruit.DeleteFruit(_object)
@@ -10308,9 +10567,7 @@ ShovelManager.Fruit = {
             end
         end)
 
-        if not success then
-            print("er: ", fail)
-        end
+        return true
     end
 }
 
@@ -10330,6 +10587,101 @@ end
 ------------ End ShovelManager
 -------------================================
 
+-- Sprinklers #sprinkler
+TaskManager.AlreadyDeletedSprinklers = {}
+
+TaskManager.Sprinklers = {
+    DeleteSprinklers = function()
+        -- 1. Global State Checks
+        if TaskManager.Is_MasterBusy() then
+            return false
+        end
+
+        -- 2. Settings & Busy Checks
+        if not FSettings.auto_remove_sprinklers then
+            return false
+        end
+
+        local anys = next(FSettings.auto_remove_sp_list)
+        if not anys then
+            return false
+        end
+
+        if IsSprinklerHeld() then
+            return false
+        end
+
+        -- 3. Execution Setup
+        local protecteditem = EventsManager.EasterAngryPlant.GetValidSprinklers()
+        local dideq = false
+
+        -- 4. Main Iteration
+        for item_name, _ in pairs(FSettings.auto_remove_sp_list) do
+            -- Master Loop Interrupts
+            if not FSettings.auto_remove_sprinklers then
+                return false
+            end
+
+            if TaskManager.Is_MasterBusy() then
+                return false
+            end
+
+            -- Check protection status
+            if protecteditem[item_name] and TaskManager.AlreadyDeletedSprinklers[item_name] then
+                continue
+            end
+
+            local items = FarmManager.GetObjectsUsingName(item_name)
+            if #items > 0 then
+                local tool = InventoryManager.GetShovel()
+                if not tool then continue end
+
+                -- Only unequip and equip if we haven't already done it for this run
+                if not dideq then
+                    unequipTools()
+                    task.wait(0.1)
+                    if not EquipToolOnChar(tool) then break end
+                    task.wait(0.2)
+                    dideq = true
+                end
+
+                -- Delete objects inner loop
+                for _, value in pairs(items) do
+                    -- Inner Interrupts
+                    if not FSettings.auto_remove_sprinklers then
+                        break
+                    end
+
+                    if TaskManager.Is_MasterBusy() then
+                        break
+                    end
+                    if protecteditem[item_name] and TaskManager.AlreadyDeletedSprinklers[item_name] then
+                        break
+                    end
+
+                    -- Ensure tool is still held (resilience check)
+                    if not IsToolHeldNew(tool) then
+                        EquipToolOnChar(tool)
+                        task.wait(0.2)
+                        if not IsToolHeldNew(tool) then break end
+                    end
+
+                    -- Execution
+                    FarmManager.DeleteObject(value)
+                    task.wait(0.9)
+                    TaskManager.AlreadyDeletedSprinklers[item_name] = true
+                end
+            end
+        end
+
+        -- 5. Cleanup
+        if dideq then
+            unequipTools()
+        end
+
+        return true
+    end
+}
 
 
 
@@ -12803,7 +13155,170 @@ SeedManager.Seeds = {
     end,
 }
 
+-- #seedloop #seed
+SeedManager.SeedLoop = function()
+    if TaskManager.Is_MasterBusy() then
+        SeedManager.Labels.updateStats("⏸️ Paused: tasks in progress...")
+        return false
+    end
 
+    if not FOtherSettings.is_auto_seed then
+        if not SeedManager.IsActive then
+            SeedManager.Labels.updateStats("🔴 Auto-Seed Disabled")
+            return false
+        else
+            SeedManager.Labels.updateStats("🟡 Auto-Seed Running (Manual)")
+        end
+    else
+        SeedManager.Labels.updateStats("🟢 Auto-Seed Running")
+    end
+
+
+    -- find all plants on the farm and see if we can place more. remove any we can't place
+    local seeds_to_place, plantedCounts = SeedManager.Seeds.GetSeedsToPlaceFiltered()
+    if not seeds_to_place then
+        if not FOtherSettings.is_auto_seed then
+            SeedManager.Labels.updateStats("🔴 No seeds to place...")
+            SeedManager.IsActive = false
+            Library:Notify("Stopping seed placement.", 2)
+            return false
+        end
+        SeedManager.Labels.updateStats("🟡 No seeds to place...")
+        return false
+    end
+
+
+
+    local center = FarmManager.mFarm.Center_Point.Position
+    local availablePositions = getGridSeedPositions(center)
+
+    -- Is it random placement?
+    local placePos = availablePositions[math.random(1, #availablePositions)]
+    -- does user need to be teleported?
+    local hrp = _S.Character:WaitForChild("HumanoidRootPart")
+    local originalCFrame = hrp.CFrame
+
+    local isRandomPos = FOtherSettings.is_seed_random
+    local max_keep = FOtherSettings.seed_keep_amount
+    local userDefinedPosition
+    if not isRandomPos then
+        userDefinedPosition = _Helper.StringToVector3(FOtherSettings.seed_location_vector)
+
+        -- start the process of moving plants
+        if not userDefinedPosition then
+            SeedManager.Labels.updateStats("🔴 Location is not valid, please select a new location.")
+            return false
+        end
+
+        if _PlantsManager.IsWithinRangeOfFarm(center, userDefinedPosition) then
+            SeedManager.Labels.updateStats("🔴 Current Location is not within your farm.")
+            return false
+        end
+    end
+
+    -- are we close to the farm?
+    local currentPlacePos = _PlantsManager.GetCurrentCFrameFromPlayerString()
+    local currentPlacePosV3 = _PlantsManager.StringToVector3(currentPlacePos)
+
+    local didTp = false
+    if _PlantsManager.IsWithinRangeOfFarm(center, currentPlacePosV3) then
+        TeleportPlayerToCFrame(_Helper.Vector3ToCFrame(center))
+        didTp = true
+    end
+
+    if userDefinedPosition then
+        placePos = userDefinedPosition
+    end
+
+
+    SeedManager.IsActive = true
+    SeedManager.Labels.updateStats("🌱 Attempting to place seeds...")
+
+    for seedName, amount in pairs(seeds_to_place) do
+        task.wait()
+        if not SeedManager.IsActive then
+            return false
+        end
+        if Varz.is_garden_full_seed then
+            SeedManager.Labels.updateStats("⏸️ Garden is full")
+            return false
+        end
+
+
+        local _seedTool = InventoryManager.GetSeedUsingName(seedName)
+        if not _seedTool then
+            continue
+        end
+        unequipTools()
+        if not EquipToolOnChar(_seedTool) then
+            continue
+        end
+        task.wait(0.1)
+
+        for i = 1, amount, 1 do
+            task.wait()
+            if not SeedManager.IsActive then
+                return false
+            end
+            if Varz.is_garden_full_seed then
+                SeedManager.Labels.updateStats("⏸️ Garden is full")
+                return false
+            end
+            local timeout = 30
+
+            if TaskManager.Is_MasterBusy() then
+                SeedManager.Labels.updateStats("⏸️ Paused: tasks in progress...")
+                return false
+            end
+
+            SeedManager.Labels.updateStats("🌱 Attempting to place seeds...")
+
+            if isRandomPos then
+                placePos = availablePositions[math.random(1, #availablePositions)]
+            end
+
+            if not _seedTool then
+                return false
+            end
+
+            if not IsToolHeldNew(_seedTool) then
+                if not _seedTool then
+                    return false
+                end
+                unequipTools()
+                if not EquipToolOnChar(_seedTool) then
+                    return false
+                end
+                task.wait(0.3)
+            end
+
+
+            if plantedCounts[seedName] ~= nil then
+                if plantedCounts[seedName] >= max_keep then
+                    SeedManager.Labels.updateInformation(plantedCounts)
+                    break
+                end
+            end
+
+            if plantedCounts[seedName] ~= nil then
+                -- plant it
+                _FruitCollectorMachine.PlantSeed(placePos, seedName)
+                plantedCounts[seedName] = plantedCounts[seedName] + 1
+            end
+            SeedManager.Labels.updateInformation(plantedCounts)
+            local speedx = FOtherSettings.seed_speed_timer1
+            task.wait(speedx)
+        end
+    end
+    if didTp then
+        TeleportPlayerToCFrame(originalCFrame)
+    end
+
+    unequipTools()
+    SeedManager.IsActive = false
+    SeedManager.Labels.updateStats("🟢 Seed placements complete")
+    return true
+end
 
 ----------END Seed system
 
@@ -12964,6 +13479,124 @@ _PlantsManager.PlacePlantUsingTrowel = function(trowel, fruit, v3Location)
     return success
 end
 
+
+-- #trowel
+_PlantsManager.TrowelLoop = function()
+    -- 1. Fast-Exit Checks
+    if TaskManager.Is_MasterBusy() then
+        _PlantsManager.UpdateTrowelStatus("🥚 Paused: tasks in progress.")
+        return false
+    end
+
+    if not _PlantsManager.trowel_is_running then
+        _PlantsManager.UpdateTrowelStatus("🔴 Not Running...")
+        return false
+    end
+
+
+    -- 2. Initial Setup
+    local posv3 = _PlantsManager.StringToVector3(FOtherSettings.trowel_saved_cframe)
+    if not posv3 then
+        _PlantsManager.UpdateTrowelStatus("🔴 Stopping: Location invalid...")
+        _PlantsManager.trowel_is_running = false
+        return false
+    end
+
+    local plants_ar = _PlantsManager.GetAllPlantsOnFarmForTrowel(posv3)
+    if not plants_ar or #plants_ar == 0 then
+        _PlantsManager.UpdateTrowelStatus("🔴 Stopping: No plants to move...")
+        _PlantsManager.trowel_is_running = false
+        return false
+    end
+
+    local mtrowel = _PlantsManager.FindTrowelTool()
+    if not mtrowel then
+        _PlantsManager.UpdateTrowelStatus("🔴 Stopping: No trowel found...")
+        _PlantsManager.trowel_is_running = false
+        return false
+    end
+
+    -- 3. Prepare for Execution
+    Varz.trowel_count_total_to_move = #plants_ar
+    Varz.trowel_current_moved = 0
+    local toolholdtries = 0
+
+    _PlantsManager.UpdateTrowelStatus("🟢 Active and running...")
+    _PlantsManager.UpdateTrowelProgress(string.format("🔄 <font color='#32CD32'>Moving </font> %d/%d",
+        Varz.trowel_current_moved, Varz.trowel_count_total_to_move))
+
+    unequipTools()
+    task.wait(0.3)
+    if not EquipToolOnChar(mtrowel) then return false end
+
+    -- 4. Main Execution Loop
+    for _, fruit in ipairs(plants_ar) do
+        -- Master Loop interruption checks
+        if not _PlantsManager.trowel_is_running then
+            _PlantsManager.UpdateTrowelStatus("❌ Stopped by user.")
+            break
+        end
+
+
+        if TaskManager.Is_MasterBusy() then
+            _PlantsManager.UpdateTrowelStatus("⏸️ Paused mid-process...")
+            break
+        end
+
+        -- Ensure Tool is held
+        if not IsToolHeld(mtrowel) then
+            _PlantsManager.UpdateTrowelStatus("❌ Tool not held. Equipping... ")
+            unequipTools()
+            task.wait(0.3)
+            EquipToolOnChar(mtrowel)
+            toolholdtries = toolholdtries + 1
+            task.wait(1)
+
+            if toolholdtries > 15 then
+                _PlantsManager.UpdateTrowelStatus("🔴 Failed to hold tool after 15 tries.")
+                break
+            end
+        end
+
+        -- Pick up plant
+        local is_pick = _PlantsManager.PickUpPlantUsingTrowel(mtrowel, fruit)
+        if not is_pick then
+            _PlantsManager.UpdateTrowelStatus("❌ Failed to pick up: " .. tostring(fruit.Name))
+            continue -- Skip to next plant
+        end
+        task.wait(0.1)
+
+        -- Place plant
+        local placedplant = _PlantsManager.PlacePlantUsingTrowel(mtrowel, fruit, posv3)
+        if not placedplant then
+            _PlantsManager.UpdateTrowelStatus("❌ Failed to place: " .. tostring(fruit.Name))
+            continue -- Skip to next plant
+        end
+
+        -- Success Updates
+        Varz.trowel_current_moved = Varz.trowel_current_moved + 1
+        _PlantsManager.UpdateTrowelStatus("🟢 Success " .. tostring(fruit.Name))
+        _PlantsManager.UpdateTrowelProgress(string.format("🔄 <font color='#32CD32'>Moving </font> %d/%d",
+            Varz.trowel_current_moved, Varz.trowel_count_total_to_move))
+
+        task.wait(0.1)
+    end
+
+    -- 5. Final Cleanup
+    unequipTools()
+
+    -- If we actually finished all plants
+    if Varz.trowel_current_moved >= Varz.trowel_count_total_to_move then
+        _PlantsManager.trowel_is_running = false
+        _PlantsManager.UpdateTrowelStatus(
+            "✅ All plants moved. If nothing moved please make sure to set cframe again and inside your farm.")
+    end
+
+    _PlantsManager.UpdateTrowelProgress(string.format("📊 Last Moved %d/%d", Varz.trowel_current_moved,
+        Varz.trowel_count_total_to_move))
+
+    return true
+end
 
 ----------------------- END TROWEL SYSTEM
 
@@ -13345,6 +13978,10 @@ CraftManager.SetRecipeUsingName = function(benchName, noDelay)
                     else
                         -- plant new
                         if FOtherSettings.craft_autoplant_workbench then
+                            if EventsManager.EasterEvent.IsEasterGarden() then
+                                return false
+                            end
+
                             CraftManager.Update_GearEventWorkbenchStatus("🍒 Trying to plant seed ", itemName)
                             local ss, rr = pcall(function()
                                 if not Varz.is_garden_full_seed then
@@ -13429,6 +14066,226 @@ CraftManager.SetRecipeUsingName = function(benchName, noDelay)
     return false
 end
 
+
+-- #fav favourite fav fruits in the farm
+TaskManager.FavouriteFruit = {
+    is_unfav_running = false,
+    IsFavouriteTarget = function(_fruit)
+        if not FOtherSettings.autofavfruits_enabled then
+            return false
+        end
+
+        -- BUG FIX: If it's not a valid Instance, it cannot be a favorite. Return false.
+        if typeof(_fruit) ~= "Instance" then
+            return false
+        end
+
+        if _FruitCollectorMachine.IsFavoriteFruitOnFarm(_fruit) then
+            return false
+        end
+
+        -- 2. Fetch settings safely
+        local favNames = type(FOtherSettings.autofavplantlist) == "table" and FOtherSettings.autofavplantlist or {}
+        local min_weight = tonumber(FOtherSettings.autofavminweight) or 70
+        local max_weight = tonumber(FOtherSettings.autofavmaxweight) or 500
+
+
+
+        -- 3. Check Name Criteria
+        local has_names = next(favNames) ~= nil
+        local nameMatches = false
+
+        if has_names then
+            -- Check if the fruit's name is explicitly on the favorite list
+            nameMatches = favNames[_fruit.Name] == true
+        else
+            -- If no specific names are provided, assume ALL plants are valid targets
+            nameMatches = true
+        end
+
+        -- EARLY EXIT: If it fails the name check, we don't need to check its weight.
+        if not nameMatches then
+            return false
+        end
+
+        -- 4. Check Weight Criteria
+        local plantWeight = _FruitCollectorMachine.GetFruitWeight(_fruit)
+
+        if min_weight and plantWeight < min_weight then
+            return false -- Too light, not a favorite
+        end
+
+        if max_weight and plantWeight > max_weight then
+            return false -- Too heavy, not a favorite
+        end
+
+        -- 5. Final Evaluation
+        -- If it survived the name check and the weight limits, it is a favorite!
+        return true
+    end,
+    FavouriteFruit = function(favtool, fruit, isFav)
+        _S.GameEvents.FavoriteToolRemote:InvokeServer(favtool, fruit, isFav)
+    end,
+
+    UnfavouriteFruits = function()
+        local favNames = type(FOtherSettings.autofavplantlist) == "table" and FOtherSettings.autofavplantlist or {}
+        local min_weight = tonumber(FOtherSettings.autofavminweight) or 70
+        local max_weight = tonumber(FOtherSettings.autofavmaxweight) or 500
+        local plantstofav, alreadyFav = _FruitCollectorMachine.GetAllFruitsInFarmReady(favNames, min_weight, max_weight)
+
+        if #alreadyFav > 0 then
+            local favtool = InventoryManager.GetFavouriteTool()
+            if not favtool then
+                Library:Notify("No fav tool ", 3)
+                return false
+            end
+
+            unequipTools()
+            if EquipToolOnChar(favtool) then
+                pcall(function()
+                    for index, value in ipairs(alreadyFav) do
+                        TaskManager.FavouriteFruit.FavouriteFruit(favtool, value, false)
+                        local w = _FruitCollectorMachine.GetFruitWeight(value)
+                        local txt1 = string.format("%s %.2fKG", value.Name, w)
+                        Library:Notify("❤️ UnFavourite Fruit " .. txt1, 3)
+                        task.wait(0.2)
+                    end
+                end)
+            end
+        else
+            Library:Notify("No fruits to unfav ", 3)
+            return false
+        end
+
+        Library:Notify("Unfav completed ", 3)
+    end,
+    FavFruitsLoop = function()
+        if not FOtherSettings.autofavfruits_enabled then
+            return false
+        end
+
+        local favNames = type(FOtherSettings.autofavplantlist) == "table" and FOtherSettings.autofavplantlist or {}
+        local min_weight = tonumber(FOtherSettings.autofavminweight) or 70
+        local max_weight = tonumber(FOtherSettings.autofavmaxweight) or 500
+        local plantstofav, alreadyFav = _FruitCollectorMachine.GetAllFruitsInFarmReady(favNames, min_weight, max_weight)
+
+        if #plantstofav > 0 then
+            local favtool = InventoryManager.GetFavouriteTool()
+            if not favtool then
+                return false
+            end
+
+            unequipTools()
+            if EquipToolOnChar(favtool) then
+                pcall(function()
+                    for index, value in ipairs(plantstofav) do
+                        TaskManager.FavouriteFruit.FavouriteFruit(favtool, value, true)
+                        local w = _FruitCollectorMachine.GetFruitWeight(value)
+                        local txt1 = string.format("%s %.2fKG", value.Name, w)
+                        Library:Notify("❤️ Favourite Fruit " .. txt1, 3)
+                        task.wait(0.5)
+                        if not FOtherSettings.autofavfruits_enabled then
+                            break
+                        end
+                    end
+                end)
+            end
+        else
+            -- Library:Notify("not fruits " .. #plantstofav, 3)
+            return false
+        end
+    end
+}
+
+
+
+-- #craft
+CraftManager.CraftLoop = function()
+    -- 1. Fast Exits & Intercepts
+    if TaskManager.Is_MasterBusy() then
+        return false
+    end
+
+    if not FSettings.allcraft.auto_craft_event then
+        CraftManager.Update_GearEventWorkbenchStatus("🔴 Not running")
+        CraftManager.Update_GearEventWorkbenchTimers("ℹ️ Select recipes and [Enable] to craft.")
+        return false
+    end
+
+    -- 2. Iterate through all Workbenches
+    for bName, _data in pairs(CraftManager.AllReceipeData) do
+        -- Master Loop Interrupts
+        if TaskManager.Is_MasterBusy() then
+            break
+        end
+
+        local rlist = FSettings.allcraft.receipe_data[bName]
+        if not rlist or next(rlist) == nil then
+            continue -- Skip to the next workbench
+        end
+
+        local current_step = CraftManager.GetWorkbenchStateUsingName(bName)
+        if current_step == nil then
+            continue
+        end
+
+        -- 3. State Machine Handling
+        if current_step == CraftManager.CraftStats.SKIP_CRAFT then
+            -- Craft is already in progress
+            CraftManager.CraftTeams.PlaceTeamIdle()
+            CraftManager.Update_GearEventWorkbenchStatus("🔨 " .. bName .. " is Crafting")
+            continue
+        elseif current_step == CraftManager.CraftStats.SELECT_RECIPE then
+            -- Ready, insert a recipe
+            CraftManager.Update_GearEventWorkbenchStatus("🛠️ " .. bName .. " Attempting Recipe...")
+
+            local success, result = pcall(function()
+                return CraftManager.SetRecipeUsingName(bName)
+            end)
+
+            if success then
+                if result == false then
+                    -- Missing items for recipe
+                    local fail_r = CraftManager.Current_Recipe_MissingItemName
+                    CraftManager.Update_GearEventWorkbenchStatus(string.format(
+                        "❌ Recipes <font color='#F527E7'>%s</font> missing <font color='#F08080'>%s</font>",
+                        tostring(CraftManager.Current_Recipe_Name),
+                        tostring(fail_r)
+                    ))
+
+                    -- Reset missing item trackers
+                    CraftManager.Current_Recipe_Name = ""
+                    CraftManager.Current_Recipe_MissingItemName = ""
+                    Varz.IS_CRAFTING = false
+                    continue
+                end
+            else
+                CraftManager.Update_GearEventWorkbenchStatus("❌ " .. bName .. " Stop craft. Error occurred.")
+            end
+        elseif current_step == CraftManager.CraftStats.START_CRAFTING then
+            -- Start crafting, press the submit button
+            CraftManager.CraftTeams.PlaceTeamSubmitItems()
+            CraftManager.StartCraftWorkbenchUsingName(bName)
+            CraftManager.Update_GearEventWorkbenchStatus("✅ " .. bName .. " Craft Started")
+        elseif current_step == CraftManager.CraftStats.SUBMIT_ITEM then
+            -- Submit/Cancel items
+            CraftManager.CancelWorkbenchUsingName(bName)
+        elseif current_step == CraftManager.CraftStats.CLAIM_REWARDS then
+            -- Craft is complete, claim the items
+            CraftManager.CraftTeams.PlaceTeamClaimItems()
+            CraftManager.Update_GearEventWorkbenchStatus("🎁 Claiming Rewards")
+
+            CraftManager.ClaimWorkbenchUsingName(bName)
+            CraftManager.Current_Recipe_Name = ""
+
+            task.wait(0.2)
+            CraftManager.Update_GearEventWorkbenchStatus("✅ Success")
+            CraftManager.Update_GearEventWorkbenchTimers("🟢 Waiting...")
+        end
+    end
+
+    return true
+end
 ------------------ END CRAFT
 
 
@@ -13467,7 +14324,7 @@ TaskManager.ReclaimTask = function()
             break
         end
 
-        Varz.IS_SEEDING = true
+
 
         for PlantName, val in pairs(plants_required) do
             local all_plants_instance = FarmManager.GetAllPlantsObjectUsingName(PlantName)
@@ -13511,7 +14368,6 @@ TaskManager.ReclaimTask = function()
             task.wait(0.5)
         end
 
-        Varz.IS_SEEDING = false
 
         if not any_found then
             ui("⚠️ <font color='#FFA500'>No plants to reclaim</font>")
@@ -13520,7 +14376,6 @@ TaskManager.ReclaimTask = function()
         ui("✅ <font color='#32CD32'>Finished reclaiming all</font>")
         break
     end
-    Varz.IS_SEEDING = false
     TaskManager.reclaim_running = false
     Library:Notify("Reclaimer completed. 🌿")
 end
@@ -15640,7 +16495,7 @@ end
 
 --------- MOnser Manager
 
-
+-- #level
 MonsterManager.LevelSystem = {
     DetailsPastBoosts = {},
     UpdateUiTextStats = function(_txt)
@@ -15704,7 +16559,192 @@ MonsterManager.LevelSystem = {
         MonsterManager.LevelSystem.UpdateDropDown()
     end,
 
+    -- #level
+    LevelPetsLoop = function()
+        -- 1. Fast Exits & Global Interrupts
+        if TaskManager.Is_MasterBusy() then
+            return false
+        end
 
+        if not FOtherSettings.pet_auto_level_auto then
+            MonsterManager.LevelSystem.UpdateUiTextStats("🔴 Not running")
+            return false
+        end
+
+        -- 2. Input Validation (with tonumber fallbacks)
+        local max_level = tonumber(FOtherSettings.pet_auto_level_max) or 100
+        local min_level = tonumber(FOtherSettings.pet_auto_level_min) or 0
+
+        if min_level > 0 and max_level <= min_level then
+            MonsterManager.LevelSystem.UpdateUiTextStats("❌ Max level can't be less than or equal to minimum level.")
+            return false
+        end
+
+        -- 3. Filter Selected Pets
+        local pets_to_level = {}
+        local selected_pets = FOtherSettings.pet_level_selected_pets or {}
+
+        for _, _uuid in ipairs(selected_pets) do
+            local currentLvl = MonsterManager.LevelSystem.GetCurrentPetLevel(_uuid)
+            if currentLvl < max_level then
+                if min_level == 0 or currentLvl >= min_level then
+                    table.insert(pets_to_level, _uuid)
+                end
+            end
+        end
+
+        if #pets_to_level == 0 then
+            MonsterManager.LevelSystem.UpdateUiTextStats("🟡 No pets found to level.")
+            return false
+        end
+
+        -- 4. Setup Execution Phase
+        MonsterManager.LevelSystem.UpdateUiTextStats("🟢 Active and running")
+        MonsterManager.LevelSystem.DetailsPastBoosts = {}
+        Varz.IS_LEVELUP_RUNNING = true
+
+        local idx = 0
+
+        -- 5. Main Leveling Loop
+        for _, _uuid in ipairs(pets_to_level) do
+            idx = idx + 1
+
+            -- Master Loop Setting Check
+            if not FOtherSettings.pet_auto_level_auto or TaskManager.Is_MasterBusy() then
+                break
+            end
+
+            -- Master Loop Priority Interrupts
+            if Varz.IS_MUTATION_RUNNING or Varz.IS_JUNGLE_RUNNING or Varz.IS_HATCHING or Varz.IS_COOKING or Varz.IS_FEEDING or Varz.IS_SEEDING or Varz.IS_SHOVELING then
+                MonsterManager.LevelSystem.UpdateUiTextStats("🟡 Yielding to priority tasks")
+                break
+            end
+
+            -- Refresh limits
+            max_level = tonumber(FOtherSettings.pet_auto_level_max) or 100
+
+            -- Validate Pet
+            local _petData = GetPetDataByUUID(_uuid)
+            if not _petData or not _petData.PetData then continue end
+
+            local PetType = _petData.PetType
+            local currentLvl = MonsterManager.LevelSystem.GetCurrentPetLevel(_uuid)
+            if currentLvl >= max_level then continue end
+
+            local pet_name = tostring(idx) .. "# " .. PetType
+            local _boosts = FOtherSettings.pet_level_boost_list
+
+            if type(_boosts) ~= "string" then
+                MonsterManager.LevelSystem.UpdateUiTextStats("🟡 Select a boost")
+                break
+            end
+
+            -- Determine Tool
+            local is_syrup = string.find(_boosts, "Syrup") ~= nil
+            local is_gear_use = string.find(_boosts, "Jelly") ~= nil
+            local _tool = nil
+
+            if is_syrup then
+                _tool = InventoryManager.GetToolUsingName(_boosts)
+            elseif is_gear_use then
+                local _cleanname = CleanItemNameXpBoosts(_boosts)
+                _tool = InventoryManager.GetToolUsingNameNormalised(_cleanname)
+            else
+                _tool = InventoryManager.GetPetAnyBoostUsingName(_boosts)
+            end
+
+            if not _tool then
+                MonsterManager.LevelSystem.UpdateUiTextStats("🟡 Boost not found: " .. tostring(_boosts))
+                break
+            end
+
+            -- Validate Pet Mover Object
+            local petmover = FarmManager.GetActivePetsPetMoverObject(_uuid)
+            if not petmover then
+                MonsterManager.LevelSystem.UpdateUiTextStats("❌ Pet not found on farm.")
+                continue
+            end
+            if petmover:IsA("Part") then
+                petmover = petmover:FindFirstChildOfClass("Model")
+            end
+
+            -- Equip Tool
+            MonsterManager.LevelSystem.UpdateUiTextStats("⚡ Applying boosts...")
+            unequipTools()
+            task.wait(0.1)
+            if not EquipToolOnChar(_tool) then
+                MonsterManager.LevelSystem.UpdateUiTextStats("🔴 Unable to equip tool.")
+                break
+            end
+            task.wait(0.2)
+
+            -- 6. Inner Application Loop
+            local lvl_give = 0
+            local needed_levels = max_level - currentLvl
+            local current_used_boosts = 0
+            local max_boost_allowed = 40
+
+            while needed_levels > 0 do
+                -- INNER Master Loop Interrupts
+                if TaskManager.Is_MasterBusy() then
+                    break
+                end
+
+                -- Safe Re-equip check
+                if not IsToolHeldNew(_tool) then
+                    EquipToolOnChar(_tool)
+                    task.wait(0.2)
+                    if not IsToolHeldNew(_tool) then break end
+                end
+
+                if current_used_boosts >= max_boost_allowed then break end
+
+                local before = MonsterManager.LevelSystem.GetCurrentPetLevel(_uuid)
+
+                -- Apply boost
+                if is_syrup then
+                    InventoryManager.TryUseSyrup(petmover)
+                    task.wait(0.3)
+                elseif is_gear_use then
+                    InventoryManager.TryUseGearBoost(_boosts, petmover)
+                    task.wait(1.2)
+                else
+                    MonsterBoostManager.ApplyBoostToPet(_uuid)
+                end
+
+                task.wait(0.15)
+
+                local after = MonsterManager.LevelSystem.GetCurrentPetLevel(_uuid)
+                local diff = after - before
+
+                if diff > 0 then
+                    lvl_give = lvl_give + diff
+                    needed_levels = needed_levels - diff
+                end
+
+                current_used_boosts = current_used_boosts + 1
+
+                MonsterManager.LevelSystem.DetailsPastBoosts[pet_name] = {
+                    cur = before, -- Changed from currentLvl to 'before' so it accurately reflects start level of the loop
+                    given_levels = lvl_give,
+                    target = max_level
+                }
+
+                MonsterManager.LevelSystem.UpdateUiTextInformation()
+
+                if after >= max_level then break end
+            end
+
+            task.wait(0.2)
+            unequipTools()
+        end
+
+        -- 7. Cleanup & Handover
+        MonsterManager.LevelSystem.UpdateUiTextStats("✅ Done applying boosts")
+        Varz.IS_LEVELUP_RUNNING = false
+
+        return true
+    end
 
 
 }
@@ -16591,6 +17631,7 @@ MonsterFeeder.FeedPetsFood = function(_foodName, amount)
     return didfeed
 end
 
+
 MonsterFeeder.FeedHungryPets = function(force_feed, ignore_max_level)
     local dx = FarmManager.GetActivePetsUUIDS()
     if not dx then
@@ -16643,17 +17684,9 @@ MonsterFeeder.FeedHungryPets = function(force_feed, ignore_max_level)
             -- continue
         end
 
-        if Varz.IS_COOKING or Varz.IS_MUTATION_RUNNING then
-            break
-        end
 
-        local toolShovel = InventoryManager.GetShovel()
-        -- is user holding any tool
-        if IsToolHeldNew(toolShovel) then
-            MonsterFeeder.UpdateLblStatsText(
-                "⚠️ You are holding a tool <font color='#ff00ff'>[Shovel]</font>, waiting for you to unequip it...")
-            task.wait(math.random(3, 5))
-            break
+        if Varz.IsPaused() or Varz.IS_GIFT or TaskManager.reclaim_running then
+            return false
         end
 
         -- feeds it
@@ -16697,7 +17730,6 @@ MonsterFeeder.FeedHungryPets = function(force_feed, ignore_max_level)
             end
 
 
-
             if fruit and not FOtherSettings.feed_food_insteadoffruits then
                 unequipTools()
                 EquipToolOnChar(fruit)
@@ -16719,8 +17751,7 @@ MonsterFeeder.FeedHungryPets = function(force_feed, ignore_max_level)
                 didfeed = true
             else
                 MonsterFeeder.UpdateLblStatsText("❌ No fruit to feed.")
-                task.wait(3)
-                break
+                return false
             end
         end
     end
@@ -16728,8 +17759,60 @@ MonsterFeeder.FeedHungryPets = function(force_feed, ignore_max_level)
 
     if not didfeed then
         MonsterFeeder.UpdateLblStatsText("❌ Nothing to feed.")
-        task.wait(1)
     end
+
+    return true
+end
+
+-- #feed #feedpets
+MonsterFeeder.FeedPetsLoop = function()
+    -- 1. Fast Exits & Intercepts
+    if Varz.IsPaused() or Varz.IS_GIFT or TaskManager.reclaim_running then
+        return false
+    end
+
+
+    if not FOtherSettings.feeding_pets_auto then
+        MonsterFeeder.UpdateLblStatsText("🔴 Not running")
+        return false
+    end
+
+    -- 2. Read Setting EVERY Tick
+    local timer_cd = tonumber(FOtherSettings.feeding_pets_timer)
+    if not timer_cd or timer_cd <= 0 then
+        timer_cd = math.random(60, 120) -- Fallback
+    end
+
+    -- 3. Responsive Cooldown Logic (Tracking LAST feed instead of NEXT feed)
+    if not Varz.last_feed_time then
+        Varz.last_feed_time = 0
+    end
+
+    local current_time = os.time()
+    local elapsed_time = current_time - Varz.last_feed_time
+
+    -- Check if elapsed time is less than the CURRENT UI setting
+    if elapsed_time < timer_cd then
+        local time_left = timer_cd - elapsed_time
+        MonsterFeeder.UpdateLblStatsText("🟢 Active. Feed in " .. time_left .. "s")
+        return false
+    end
+
+    -- 4. Execution
+    MonsterFeeder.UpdateLblStatsText("🟢 Feeding pets now...")
+
+    local success, err = pcall(function()
+        return MonsterFeeder.FeedHungryPets(FOtherSettings.force_feed_all_pets, true)
+    end)
+
+    if not success then
+        warn("[PetFeeder] FeedHungryPets failed:", err)
+    end
+
+    -- 5. Set the LAST feed time to right now
+    Varz.last_feed_time = os.time()
+
+    return true
 end
 
 --------------------- Feeding
@@ -17238,6 +18321,19 @@ EventsManager.EasterAngryPlant = {
     AngryPlantModel          = nil,
     e_isfirst                = true,
 
+    GetValidSprinklers       = function()
+        local ls = {
+            ["Chocolate Sprinkler"] = true,
+            ["Basic Sprinkler"] = true,
+            ["Advanced Sprinkler"] = true,
+            ["Godly Sprinkler"] = true,
+            ["Master Sprinkler"] = true,
+            -- ["Grandmaster Sprinkler"] = true,
+        }
+
+        return ls
+    end,
+
     GetAngryPlantMode        = function()
         EventsManager.EasterAngryPlant.AngryPlantModel = FallEventManager.findInWorkspaceOrInteraction("JimTheFlytrap",
             "Model")
@@ -17301,27 +18397,26 @@ EventsManager.EasterAngryPlant = {
             return false
         end
 
-        Varz.IS_HATCHING = true
-        task.wait(2)
+        Varz.IS_EVENT_TASK = true
         local shovel = InventoryManager.GetShovel()
         if shovel then
             unequipTools()
             EquipToolOnChar(shovel)
             task.wait(0.1)
         else
-            Varz.IS_HATCHING = false
+            Varz.IS_EVENT_TASK = false
             return false
         end
 
         for _, item in ipairs(ls) do
             ShovelManager.Plant.DeletePlant(item)
             Library:Notify("Deleted plant " .. item.Name .. " for Evil Bunny Event!")
-            task.wait(3)
+            task.wait(1)
             unequipTools()
             break
         end
 
-        Varz.IS_HATCHING = false
+        Varz.IS_EVENT_TASK = false
     end,
 
     GetCurrentRequiredPlant  = function()
@@ -17374,213 +18469,288 @@ EventsManager.EasterAngryPlant = {
         -- -- 2. Unpack nested 'GoldenEgg' variables safely
         local goldenEggBuyAmount = eventData.GoldenEgg and eventData.GoldenEgg.BuyAmount or 0
         --local goldenEggLastBuyTime = eventData.GoldenEgg and eventData.GoldenEgg.LastBuyTime
-
-        if goldenEggBuyAmount < 16 then
+        local maxbuy = tonumber(FOtherSettings.autobuyeventeggsamount) or 19
+        if goldenEggBuyAmount < maxbuy then
             game:GetService("ReplicatedStorage").GameEvents.EasterEvent.TryBuyGoldenEggRE:FireServer()
         end
     end,
 
     FeedRequiredPlant        = function()
-        task.spawn(function()
-            while true do
-                task.wait(10)
+        EventsManager.EasterAngryPlant.BuyEggs()
 
-                if EventsManager.EasterAngryPlant.e_isfirst then
-                    task.wait(10)
-                    EventsManager.EasterAngryPlant.e_isfirst = false
-                    continue
-                end
-
-                if Varz.IsPaused() then
-                    continue
-                end
-
-                EventsManager.EasterAngryPlant.BuyEggs()
-
-                EventsManager.EasterAngryPlant.ShovelEvilBunnyPlant()
-
-
-                local pos = EventsManager.EasterEvent.GetEasterSeedPlacementPoint()
-                local plantName, weight, muts = EventsManager.EasterAngryPlant.GetCurrentRequiredPlant()
-                if not plantName then
-                    continue
-                end
-
-                if not FOtherSettings.eventangry_plant_auto then
-                    continue
-                end
-
-                if not EventsManager.EasterEvent.IsEasterGarden() then
-                    continue
-                end
-
-                -- get plant from backpack #easter
-                local item = InventoryManager.GetFruitUsingNameWeightAndMutation(plantName, weight, muts)
-                if item then
-                    -- print("Have item for angry plant ", plantName, weight)
-
-                    if EventsManager.EasterAngryPlant.AngryPlantModel then
-                        GameDataManager.Teleport.TeleportTo(EventsManager.EasterAngryPlant.AngryPlantModel, true)
-                        task.wait(1)
-                    else
-                        continue
-                    end
-                    Varz.IS_SEEDING = true
-                    task.wait(2)
-
-                    unequipTools()
-                    task.wait(0.4)
-                    EquipToolOnChar(item)
-                    game:GetService("ReplicatedStorage").GameEvents.SeedPackGiverEvent:FireServer("SubmitHeldPlant")
-                    task.wait(2)
-                    game:GetService("ReplicatedStorage").GameEvents.SeedPackGiverEvent:FireServer("SubmitHeldPlant")
-                    Varz.IS_SEEDING = false
-
-                    game:GetService("ReplicatedStorage").GameEvents.SeedPackGiverEvent:FireServer("ClaimPremiumPack")
-                else
-                    -- print("# Dont Have item for angry plant ", plantName, weight)
-                    -- enforce collection or plant
-
-                    local shouldcollect = false
-
-                    local plants_singles = {
-                        ["Easter Liquorice"] = true,
-                        ["Easter Candy Carrot"] = true,
-                    }
-                    local count = 0
-                    local min_required = 0
-
-                    if plants_singles[plantName] then
-                        count = FarmManager.GetPlantCountBySeedAndWeightMutations(plantName, weight)
-                        min_required = 3
-                    else
-                        count = FarmManager.GetPlantCountBySeed(plantName)
-                    end
-
-                    if count > 30 then
-                        continue
-                    end
-
-                    local item_amount = InventoryManager.GetSeedCountUsingName(plantName)
-
-
-                    if count <= min_required then
-                        -- print("Dont have this plant ", plantName)
-                        local amountp = 9
-
-                        Varz.IS_SEEDING = true
-                        task.wait(1)
-
-
-                        -- if single harvest then plant more
-                        if plants_singles[plantName] then
-                            amountp = 9
-                            -- This must be placed before seeding
-                            -- place a chocolate sprinkler, if mutation is needed
-
-                            if FOtherSettings.autoplacechocolatesprinkler then
-                                if muts["Choc"] then
-                                    local spname = "Chocolate Sprinkler"
-                                    local hasOnFarm = FarmManager.GetSprinklerOnFarm(spname)
-                                    if not hasOnFarm then
-                                        local sprinklerOb = InventoryManager.GetSprinklerUsingName(spname)
-                                        --print("Get Chocolate Sprinkler")
-                                        if sprinklerOb then
-                                            unequipTools()
-                                            EquipToolOnChar(sprinklerOb)
-                                            task.wait(0.1)
-                                            InventoryManager.PlaceSprinkler(pos)
-                                            --  print("Place Chocolate Sprinkler")
-                                        end
-                                    end
-                                end
-                            end
-                        end
-
-                        _FruitCollectorMachine.PlaceSeedSmart(plantName, amountp, pos)
-                        Varz.IS_SEEDING = false
-                    else
-                        shouldcollect = true
-                    end
-
-
-                    if shouldcollect then
-                        -- we have these plants. harvest for angry plants
-                        -- find and collect fruit with mutation , weight and name
-                        --print("Collect plant for angry plant ", plantName)
-                        local didcollect = _FruitCollectorMachine.CollectFruitByNameAndMutationAndWeight(plantName, 1,
-                            weight, muts)
-                        task.wait(1)
-
-                        -- force collect if we failed to collect
-                        if not didcollect then
-                            _FruitCollectorMachine.CollectFruitByNameAndMutationAndWeight(plantName, 3,
-                                weight, muts, true)
-                        end
-                        task.wait(1)
-                    end
-                end
-            end
+        pcall(function()
+            EventsManager.EasterAngryPlant.ShovelEvilBunnyPlant()
         end)
-    end,
 
-    SkipPlantEaster          = function(plantName, pWeight, plantMutations1, plantVariants1)
-        -- Instantly look up the required list for this specific plant name
+        if TaskManager.Is_MasterBusy() then
+            return false
+        end
+
         if not FOtherSettings.eventangry_plant_auto then
             return false
         end
 
-        local requiredList = Varz.EasterAngryPlants[plantName]
 
-        -- If this plant isn't in our quest list AT ALL, instantly return false
+        if not EventsManager.EasterEvent.IsEasterGarden() then
+            return false
+        end
+
+
+
+        -- 4. Target Acquisition
+        local pos = EventsManager.EasterEvent.GetEasterSeedPlacementPoint()
+        local plantName, weight, muts = EventsManager.EasterAngryPlant.GetCurrentRequiredPlant()
+
+        if not plantName then
+            return false
+        end
+
+        -- 5. Check Inventory
+        local item = InventoryManager.GetFruitUsingNameWeightAndMutation(plantName, weight, muts)
+
+        -- ==========================================
+        -- BRANCH A: WE HAVE THE FRUIT (SUBMIT IT)
+        -- ==========================================
+        if item then
+            if not EventsManager.EasterAngryPlant.AngryPlantModel then
+                return false
+            end
+
+            Varz.IS_EVENT_TASK = true
+            GameDataManager.Teleport.TeleportTo(EventsManager.EasterAngryPlant.AngryPlantModel, true)
+            task.wait(0.5)
+
+            Varz.IS_SEEDING = true
+
+            unequipTools()
+            task.wait(0.2)
+
+            if EquipToolOnChar(item) then
+                task.wait(0.2)
+                local remote = game:GetService("ReplicatedStorage").GameEvents.SeedPackGiverEvent
+
+                -- Submit to plant
+                remote:FireServer("SubmitHeldPlant")
+                task.wait(0.5)
+                remote:FireServer("SubmitHeldPlant") -- Failsafe second fire
+
+                -- Claim rewards
+                remote:FireServer("ClaimPremiumPack")
+            end
+
+            -- Safe reset
+            Varz.IS_SEEDING = false
+            Varz.IS_EVENT_TASK = false
+            return true
+        end
+
+        -- ==========================================
+        -- BRANCH B: WE NEED TO PLANT OR HARVEST
+        -- ==========================================
+        local shouldcollect = false
+        local plants_singles = {
+            ["Easter Liquorice"] = true,
+            ["Easter Candy Carrot"] = true,
+        }
+
+        local count = 0
+        local min_required = 0
+
+        if plants_singles[plantName] then
+            count = FarmManager.GetPlantCountBySeedAndWeightMutations(plantName, weight)
+            min_required = 3
+        else
+            count = FarmManager.GetPlantCountBySeed(plantName)
+        end
+
+        -- -- If we have plenty growing, just wait for them to finish
+        -- if count > 30 then
+        --     return false
+        -- end
+
+        if count <= min_required then
+            -- WE NEED TO PLANT
+            local amountp = 9 -- Default batch amount
+
+            Varz.IS_SEEDING = true
+            Varz.IS_EVENT_TASK = true
+
+            -- Handle special placement logic for Single Harvest Event Plants
+            if plants_singles[plantName] then
+                -- 1. Chocolate Sprinkler
+                if FOtherSettings.autoplacechocolatesprinkler and muts and muts["Choc"] then
+                    local spname = "Chocolate Sprinkler"
+                    if not FarmManager.GetSprinklerOnFarm(spname) then
+                        local sprinklerOb = InventoryManager.GetSprinklerUsingName(spname)
+                        if sprinklerOb then
+                            unequipTools()
+                            if EquipToolOnChar(sprinklerOb) then
+                                task.wait(0.1)
+                                InventoryManager.PlaceSprinkler(pos)
+                                task.wait(0.2)
+                            end
+                        end
+                    end
+                end
+
+                -- 2. Other Required Sprinklers
+                local requiredsp = EventsManager.EasterAngryPlant.GetValidSprinklers() or {}
+                for sName, _ in pairs(requiredsp) do
+                    if sName == "Chocolate Sprinkler" then continue end
+
+                    if not FarmManager.GetSprinklerOnFarm(sName) then
+                        local sprinklerOb = InventoryManager.GetSprinklerUsingName(sName)
+                        if sprinklerOb then
+                            unequipTools()
+                            if EquipToolOnChar(sprinklerOb) then
+                                task.wait(0.1)
+                                InventoryManager.PlaceSprinkler(pos)
+                                Library:Notify("Placed " .. sName, 1)
+                                task.wait(0.4)
+                            end
+                        end
+                    end
+                end
+            end
+            task.wait(1)
+            -- Plant the actual seed
+            _FruitCollectorMachine.PlaceSeedSmart(plantName, amountp, pos)
+
+            -- Safe reset
+            Varz.IS_SEEDING = false
+            Varz.IS_EVENT_TASK = false
+        else
+            -- WE NEED TO HARVEST
+            shouldcollect = true
+        end
+
+        shouldcollect = true
+        if shouldcollect then
+            local didcollect = _FruitCollectorMachine.CollectFruitByNameAndMutationAndWeight(plantName, 1, weight, muts)
+            task.wait(0.5)
+
+
+            -- Force collect if we failed to collect
+            if not didcollect then
+                --print("Did not collect ", plantName)
+                _FruitCollectorMachine.CollectFruitByNameAndMutationAndWeight(plantName, 3, weight, muts, true)
+            else
+                --print("Collected ", plantName)
+            end
+        end
+
+        return true
+    end,
+
+    SkipPlantEaster          = function(plantName, pWeight, plantMutations1, plantVariants1)
+        -- 1. Check Master Setting
+        if not FOtherSettings.eventangry_plant_auto then
+            return false
+        end
+
+        -- 2. Check if the plant is required at all
+        local requiredList = Varz.EasterAngryPlants[plantName]
         if not requiredList then
             return false
         end
 
-        local plantMutations = plantMutations1 or {}
-        local plantVariants = plantVariants1 or {}
+        -- 3. Initialize Tracking Memory
+        Varz.EasterPlantStockpile = Varz.EasterPlantStockpile or {}
+        Varz.EasterPlantStockpile[plantName] = Varz.EasterPlantStockpile[plantName] or {}
 
-        -- Only loop through the few requirements for THIS specific plant
+        -- 4. Find the best (highest) tier this plant can fill
+        local best_tier = nil
+        local max_weight_found = -1
+        local maxstock = 10
+
+        if VulnManager.SpecialCurrency.ChocCoins() < 50000 then
+            maxstock = 1
+        end
+
         for _, item in ipairs(requiredList) do
-            if pWeight >= item.weight then
-                local isMatch = true
+            local req_w = item.weight
 
-                -- Check mutations
-                if item.is_mut then
-                    local has_required_mut = false
-                    for req_mut, _ in pairs(item.mutations) do
-                        if plantMutations[req_mut] then
-                            has_required_mut = true
-                            break
-                        end
-                    end
-                    if not has_required_mut then
-                        isMatch = false
-                    end
-                end
+            -- Does our plant meet this tier's minimum weight?
+            if pWeight >= req_w then
+                local current_stock = Varz.EasterPlantStockpile[plantName][req_w] or 0
 
-                -- Check variants
-                if isMatch and item.is_variant then
-                    local has_required_variant = false
-                    for req_var, _ in pairs(item.variants) do
-                        if plantVariants[req_var] then
-                            has_required_variant = true
-                            break
-                        end
+                -- Is this tier still hungry for plants? (< 10)
+                if current_stock < 10 then
+                    -- Is this the highest valid tier we've checked so far?
+                    if req_w > max_weight_found then
+                        max_weight_found = req_w
+                        best_tier = req_w
                     end
-                    if not has_required_variant then
-                        isMatch = false
-                    end
-                end
-
-                -- If it matched this specific requirement, skip it
-                if isMatch then
-                    return true
                 end
             end
         end
 
-        return false -- Passed all checks, don't skip
+        -- 5. Execution: Did we find a bucket for it?
+        if best_tier then
+            -- Add it to the stockpile for that specific required weight tier
+            Varz.EasterPlantStockpile[plantName][best_tier] = (Varz.EasterPlantStockpile[plantName][best_tier] or 0) + 1
+            return true -- KEEP IT in the garden
+        end
+
+        -- It doesn't satisfy any tiers, OR all the tiers it satisfies are already 10/10.
+        return false -- Let the bot harvest/trash it
+
+        -- -- Instantly look up the required list for this specific plant name
+        -- if not FOtherSettings.eventangry_plant_auto then
+        --     return false
+        -- end
+
+        -- local requiredList = Varz.EasterAngryPlants[plantName]
+
+        -- -- If this plant isn't in our quest list AT ALL, instantly return false
+        -- if not requiredList then
+        --     return false
+        -- end
+
+        -- local plantMutations = plantMutations1 or {}
+        -- local plantVariants = plantVariants1 or {}
+
+        -- -- Only loop through the few requirements for THIS specific plant
+        -- for _, item in ipairs(requiredList) do
+        --     if pWeight >= item.weight then
+        --         local isMatch = true
+
+        --         -- Check mutations
+        --         if item.is_mut then
+        --             local has_required_mut = false
+        --             for req_mut, _ in pairs(item.mutations) do
+        --                 if plantMutations[req_mut] then
+        --                     has_required_mut = true
+        --                     break
+        --                 end
+        --             end
+        --             if not has_required_mut then
+        --                 isMatch = false
+        --             end
+        --         end
+
+        --         -- Check variants
+        --         if isMatch and item.is_variant then
+        --             local has_required_variant = false
+        --             for req_var, _ in pairs(item.variants) do
+        --                 if plantVariants[req_var] then
+        --                     has_required_variant = true
+        --                     break
+        --                 end
+        --             end
+        --             if not has_required_variant then
+        --                 isMatch = false
+        --             end
+        --         end
+
+        --         -- If it matched this specific requirement, skip it
+        --         if isMatch then
+        --             return true
+        --         end
+        --     end
+        -- end
+
+        -- return false -- Passed all checks, don't skip
     end,
     LoadModuleRequiredPlants = function()
         local EASTER_SeedGiverQuestProgression = require(game:GetService("ReplicatedStorage").Data
@@ -17624,7 +18794,7 @@ EventsManager.EasterAngryPlant = {
 
 EventsManager.EasterAngryPlant.GetAngryPlantMode()
 EventsManager.EasterAngryPlant.LoadModuleRequiredPlants()
-EventsManager.EasterAngryPlant.FeedRequiredPlant()
+
 
 
 EventsManager.EasterEvent = {
@@ -17738,77 +18908,66 @@ EventsManager.EasterEvent = {
     end,
 
     StartEggHunt = function()
-        task.spawn(function()
-            local rs = game:GetService("ReplicatedStorage")
+        -- 1. Global Intercepts & Settings Checks
 
-            -- Cache once
-            local gameEvents = rs:FindFirstChild("GameEvents")
-            local easter = gameEvents and gameEvents:FindFirstChild("Easter2026")
-            local remote = easter and easter:FindFirstChild("EasterEventStartEggHunt")
+        if TaskManager.Is_MasterBusy() then
+            return false
+        end
 
-            if not remote or not remote:IsA("RemoteFunction") then
-                return warn("RemoteFunction not found or invalid")
+        if not FOtherSettings.is_auto_egghunt then
+            return false
+        end
+
+        -- 2. Cooldown Check
+        local currentCooldown = tonumber(_S.LocalPlayer:GetAttribute("EasterEggHuntCooldownRemaining")) or 0
+        if currentCooldown > 0 then
+            -- Cooldown is still active, return quickly so Master Loop can run other tasks
+            return false
+        end
+
+        -- 3. Pre-requisite Checks
+        local rs = game:GetService("ReplicatedStorage")
+        local gameEvents = rs:FindFirstChild("GameEvents")
+        local easter = gameEvents and gameEvents:FindFirstChild("Easter2026")
+        local remote = easter and easter:FindFirstChild("EasterEventStartEggHunt")
+
+        if not remote or not remote:IsA("RemoteFunction") then
+            warn("RemoteFunction not found or invalid")
+            return false
+        end
+
+        -- 4. NPC Interaction
+        if not EventsManager.EasterEvent.NpcEaster then
+            EventsManager.EasterEvent.NpcEaster = EventsManager.EasterEvent.GetNPC()
+        end
+
+        local npc_x = EventsManager.EasterEvent.NpcEaster
+
+        if npc_x and npc_x:FindFirstChild("RootPart") then
+            local root = npc_x.RootPart
+            local firstPrompt = root:FindFirstChildOfClass("ProximityPrompt")
+
+            if firstPrompt then
+                -- Tell Master Loop we are busy
+                Varz.IS_EVENT_TASK = true
+
+                GameDataManager.Teleport.TeleportTo(npc_x, true)
+                task.wait(1) -- Reduced from 2s to 1s for snappiness
+
+                GameDataManager.ProximityPrompt.ActivateProximityPrompt(firstPrompt)
+                task.wait(1)
+
+                local option = "#1"
+                EventsManager.EasterEvent.SelectStartHuntUi(option)
+                task.wait(1)
+
+                -- Cleanup State
+                Varz.IS_EVENT_TASK = false
+                return true
             end
+        end
 
-            -- Loop
-            while true do
-                task.wait(10)
-
-                if not FOtherSettings.is_auto_egghunt then
-                    task.wait()
-                    continue
-                end
-
-                local currentCooldown = tonumber(_S.LocalPlayer:GetAttribute("EasterEggHuntCooldownRemaining")) or 0
-
-                if currentCooldown <= 0 then
-                    -- game:GetService("ReplicatedStorage").GameEvents.Easter2026.EasterEventStartEggHunt:InvokeServer()
-                    if not EventsManager.EasterEvent.NpcEaster then
-                        EventsManager.EasterEvent.NpcEaster = EventsManager.EasterEvent.GetNPC()
-                    end
-                    local npc_x = EventsManager.EasterEvent.NpcEaster
-
-                    if npc_x and npc_x:FindFirstChild("RootPart") then
-                        local root = npc_x.RootPart
-
-                        -- 3. Safely grab the first ProximityPrompt
-                        local firstPrompt = root:FindFirstChildOfClass("ProximityPrompt")
-
-                        if firstPrompt then
-                            -- print("Success! Target found: " .. firstPrompt.Name)
-                            -- Your logic here
-                            GameDataManager.Teleport.TeleportTo(npc_x, true)
-                            task.wait(2)
-                            GameDataManager.ProximityPrompt.ActivateProximityPrompt(firstPrompt)
-                            task.wait(2)
-
-                            local option = "#1"
-                            EventsManager.EasterEvent.SelectStartHuntUi(option)
-                            task.wait(2)
-                        end
-                    else
-                        -- print("NPC path was invalid. No crash occurred.")
-                    end
-
-
-                    -- print("Started hunt")
-                    -- task.wait(10)
-                end
-
-
-                -- -- if txt == "Egg Hunt is READY TO START" then
-                -- local success, response = pcall(function()
-                --     return remote:InvokeServer()
-                -- end)
-
-                -- if success then
-                --     print("Server response:", response)
-                -- else
-                --     warn("Invoke failed:", response)
-                -- end
-                -- end
-            end
-        end)
+        return false
     end,
 
     CollectFruitsEaster = function()
@@ -17838,6 +18997,7 @@ EventsManager.EasterEvent = {
         if fast_mode then
             while true do
                 task.wait(0.5)
+                Varz.EasterPlantStockpile = {}
                 if not FOtherSettings.is_fall_event_running then break end
 
                 if not fast_mode then
@@ -17874,6 +19034,7 @@ EventsManager.EasterEvent = {
         else
             while true do
                 task.wait(0.5)
+                Varz.EasterPlantStockpile = {}
                 if not FOtherSettings.is_fall_event_running then break end
                 if Varz.IS_HATCHING or Varz.backpack_full then
                     break
@@ -17907,17 +19068,15 @@ EventsManager.EasterEvent = {
 
     PlacePlantsEaster = function()
         if not EventsManager.EasterEvent.IsEasterGarden() then
-            return
+            return false
         end
 
         if not FOtherSettings.is_auto_plantseedEvent then
-            return
+            return false
         end
-
-        if Varz.IS_SEEDING then
-            return
+        if TaskManager.Is_MasterBusy() then
+            return false
         end
-
 
         local easterPlants = {
             -- ["Chocolate Carrot"] = true,
@@ -17964,6 +19123,10 @@ EventsManager.EasterEvent = {
                 break
             end
 
+            if TaskManager.Is_MasterBusy() then
+                break
+            end
+
             if limitmax_placement[seedname] then
                 local count = FarmManager.GetPlantCountBySeed(seedname)
                 if count >= max_allowed then
@@ -17998,68 +19161,127 @@ EventsManager.EasterEvent = {
         end)
     end,
 
-    LoopSeedEasterPlant = function()
-        task.spawn(function()
-            while true do
-                task.wait(7)
-                EventsManager.EasterEvent.PlacePlantsEaster()
-            end
-        end)
-    end,
+
 
     LoopFindAndCollectEggs = function()
-        -- How often to scan the workspace (in seconds).
-        -- 0.5 seconds is fast enough for most games without causing massive lag.
+        -- 1. Fast Exits & Global Intercepts
 
-        task.spawn(function()
-            local is_first = true
-            while true do
-                task.wait(3)
-                if is_first then
-                    task.wait(10)
-                    is_first = false
-                end
+        if TaskManager.Is_MasterBusy() then
+            return false
+        end
 
+        local collected_any = false
 
+        -- 2. Scan Workspace
+        for _, child in ipairs(workspace:GetChildren()) do
+            -- Master Loop Interrupts: Break out instantly if something important happens
+            if TaskManager.Is_MasterBusy() then
+                return false
+            end
 
-                for _, child in ipairs(workspace:GetChildren()) do
-                    -- Check if the item is named "Model"
+            if child.Name == "Model" and child:IsA("Model") then
+                -- Recursively search for the ProximityPrompt inside the Model
+                local prompt = child:FindFirstChildWhichIsA("ProximityPrompt", true)
 
-                    if not child:IsA("Model") then
-                        continue
+                if prompt and prompt.ActionText == "Collect" then
+                    -- 3. Execution Phase
+                    -- Lock the event state so the Master Loop doesn't interrupt our teleport
+                    Varz.IS_EVENT_TASK = true
+
+                    GameDataManager.Teleport.TeleportTo(child, true)
+                    task.wait(0.5) -- Reduced from 2s: just enough time for server to register proximity
+
+                    -- Verify the prompt still exists after teleporting (in case someone else grabbed it)
+                    if prompt.Parent then
+                        GameDataManager.ProximityPrompt.ActivateProximityPrompt(prompt)
+                        collected_any = true
+                        task.wait(0.5) -- Brief buffer before checking the next egg
                     end
 
-                    if child.Name == "Model" then
-                        -- Recursively search for the ProximityPrompt inside the Model
-                        local prompt = child:FindFirstChildWhichIsA("ProximityPrompt", true)
-
-                        if prompt then
-                            if prompt.ActionText == "Collect" then
-                                -- Fire the prompt if your executor supports it
-                                GameDataManager.Teleport.TeleportTo(child, true)
-                                task.wait(2)
-                                GameDataManager.ProximityPrompt.ActivateProximityPrompt(prompt)
-                            end
-                        end
-                    end
+                    Varz.IS_EVENT_TASK = false
                 end
             end
-        end)
+        end
+
+        return collected_any
+    end,
+    AutoPlaceSprinklersTemp = function()
+        -- 1. Global State Checks
+
+
+        if TaskManager.Is_MasterBusy() then
+            return false
+        end
+
+
+        if not FOtherSettings.enable_autoplacesprinklers then
+            return false
+        end
+
+        local spx = FOtherSettings.autoplacesprinklers or {}
+        if next(spx) == nil then
+            return false
+        end
+
+        local loc = EventsManager.EasterEvent.GetEasterSeedPlacementPoint()
+        if not loc then
+            return false -- Safety check in case the event point doesn't exist
+        end
+
+        -- 3. Execution Loop
+        for sName, value in pairs(spx) do
+            -- Master Loop Interrupts
+            if not FOtherSettings.enable_autoplacesprinklers then
+                break
+            end
+
+            if TaskManager.Is_MasterBusy() then
+                break
+            end
+
+            -- Check if already placed
+            if EventsManager.EasterEvent.PlacedSprinklers[sName] then
+                continue
+            end
+
+            local tool = InventoryManager.GetSprinklerUsingName(sName)
+            if not tool then
+                continue
+            end
+
+            -- Execute Placement
+            unequipTools()
+            task.wait(0.1)
+            EquipToolOnChar(tool)
+            task.wait(0.2) -- Give the game a split second to register the tool in hand
+
+            InventoryManager.PlaceSprinkler(loc)
+            task.wait(0.7)
+
+            -- Verification
+            local ob = FarmManager.GetSprinklerOnFarm(sName)
+            if ob then
+                -- We successfully placed it
+                EventsManager.EasterEvent.PlacedSprinklers[sName] = true
+            end
+        end
+
+        -- 4. Cleanup
+        if IsSprinklerHeld() then
+            unequipTools()
+        end
+
+        return true
     end
 }
 
-EventsManager.EasterEvent.StartEggHunt()
-EventsManager.EasterEvent.LoopFindAndCollectEggs()
-EventsManager.EasterEvent.LoopSeedEasterPlant()
---EventsManager.EasterEvent.AutoSellEaster()
---EventsManager.EasterEvent.GetEasterSeedPlacementPoint()
 
 task.spawn(function()
     while true do
-        task.wait(2)
+        task.wait(1)
 
         if not FarmManager.IsDataFullyLoaded() or not FarmManager.IsFarmFullyLoaded() then
-            task.wait(5)
+            task.wait(10)
             continue
         end
         EventsManager.EasterEvent.CollectFruitsEaster()
@@ -18608,6 +19830,27 @@ end
 
 Varz.InventoryDataBind = VulnManager.GetBigDataUsingKey("InventoryData")
 VulnManager.DataSaveSlots = VulnManager.GetBigDataUsingKey("SaveSlots")
+
+
+-- HeartCoins = 1546,
+--     CandyCorn = 118908,
+--     ChocCoins = 1280800818,
+--     Chi = 438689,
+--     ButtercupCoins = 0,
+--     SummerCoins = 16,
+--     PassPoints = 559250,
+--     Honey = 9,
+--     GardenCoins = 73136,
+--     CarrotCoins = 6,
+--     AdventToken = 0,
+--     FairyPoints = 582041
+VulnManager.SpecialCurrency = {
+    ChocCoins = function()
+        local data = VulnManager.GetBigDataUsingKey["SpecialCurrency"]
+        if not data then return 0 end
+        return data.ChocCoins or 0
+    end
+}
 
 GameDataManager.GetTotalEggsOnFarm = function()
     local count = 0
@@ -20180,7 +21423,7 @@ end)
 
 
 ----------------------------------------------
--------- Water Manager
+-------- Water Manager #water
 ----------------------------------------------
 WaterManager.UI = {
     UpdateProgress = function(_txt)
@@ -20195,7 +21438,109 @@ WaterManager.UI = {
             return
         end
         UI_LABELS.lbl_watering_stats:SetText(_txt)
+    end,
+    WaterLoop = function()
+        if TaskManager.Is_MasterBusy() then
+            WaterManager.UI.UpdateStatus("ℹ️ Other tasks in progress..")
+            return false
+        end
+
+        if not FOtherSettings.watering_is_auto then
+            WaterManager.UI.UpdateStatus("🔴 Not Running")
+            return false
+        end
+
+        local waterf = InventoryManager.GetWateringCan("Watering Can")
+        if not waterf then
+            -- dont have cans, skip
+            WaterManager.UI.UpdateStatus("❌ You do not have watering cans.")
+            return false
+        end
+
+        WaterManager.UI.UpdateStatus("🟢 Active and Running")
+        WaterManager.UI.UpdateProgress("")
+
+
+        local not_grown = WaterManager.Plants.GetPlantsNotGrown()
+        local found_trees_count = #not_grown
+        WaterManager.UI.UpdateStatus("ℹ️ Found " .. tostring(found_trees_count) .. " plants to water.")
+
+        if found_trees_count <= 0 then
+            WaterManager.UI.UpdateStatus("❌ No plants to water.")
+            return false
+        end
+
+        if waterf then
+            unequipTools()
+            task.wait(0.1)
+            EquipToolOnChar(waterf)
+            task.wait(0.1)
+        end
+
+        local amount = tonumber(FOtherSettings.watering_amount_to_water)
+        local speed_water = tonumber(FOtherSettings.watering_speed_time)
+        local plant_limit = 20
+        local current_water = 0
+
+        for _, tree in ipairs(not_grown) do
+            if not FOtherSettings.watering_is_auto then break end
+
+            if TaskManager.Is_MasterBusy() then
+                break
+            end
+
+            local pos = _FruitCollectorMachine.GetPlantPosition(tree)
+            if not pos then
+                continue
+            end
+            if not waterf then
+                break
+            end
+            if current_water > plant_limit then
+                --warn(" Plant limit reached")
+                break
+            end
+
+
+            if IsSprinklerHeld() then
+                break
+            end
+
+            WaterManager.UI.UpdateStatus("🟢 Watering in progress...")
+            WaterManager.UI.UpdateProgress("💧 Watering " .. tree.Name)
+            local water_cans_used = 0
+            for i = 1, amount, 1 do
+                if TaskManager.Is_MasterBusy() then
+                    break
+                end
+
+                if not waterf then
+                    break
+                end
+
+                if IsSprinklerHeld() then
+                    break
+                end
+
+                if not IsToolHeldNew(waterf) then
+                    unequipTools()
+                    return false
+                end
+                water_cans_used = water_cans_used + 1
+                InventoryManager.UseWateringCan(pos)
+                WaterManager.UI.UpdateProgress("💧 Watering " ..
+                    tree.Name .. "  " .. tostring(water_cans_used) .. "/" .. amount)
+                task.wait(speed_water)
+            end
+
+            task.wait(0.1)
+            current_water = current_water + 1
+        end
+        WaterManager.UI.UpdateStatus("🟢 Watering completed...")
+        unequipTools()
+        return true
     end
+
 }
 
 WaterManager.Plants = {
@@ -21376,8 +22721,13 @@ CookingManager.SubmitAllFruits = function(uuid, _listfruittools)
     task.wait(0.2 + CookingManager.SpeedOffset)
 end
 
+-- #cook
 CookingManager.CheckAndPlaceNewPlants = function(list_array)
     if not list_array or #list_array == 0 then
+        return false
+    end
+
+    if EventsManager.EasterEvent.IsEasterGarden() then
         return false
     end
     -- check if we have them
@@ -21494,6 +22844,117 @@ end
 
 -- ingredient
 
+-- #cook
+CookingManager.CookLoop = function()
+    -- 1. Master Loop Global Interrupts
+    if TaskManager.Is_MasterBusy() then
+        return false
+    end
+
+    if not FOtherSettings.is_auto_cook then
+        CookingManager.Update_AllStatus("🔴 Not active or running")
+        CookingManager.TimeDisplayPots = {}
+        return false
+    end
+
+
+    CookingManager.Update_AllStatus("🟢 Active and running")
+
+    -- 3. Validate Pots
+    local all_pots = CookingManager.GetAllCookingPots()
+    if not all_pots then
+        CookingManager.Update_AllStatus("❌ No Cooking Pots found.. Stopping..")
+        Library:Notify("Cooking stopped - you do not have any Cooking Pots.", 4)
+        CookingManager.TimeDisplayPots = {}
+        CookingManager.Update_AllTimers()
+
+        -- Disable setting and save
+        FOtherSettings.is_auto_cook = false
+        SaveDataOther()
+        if Varz.UI_Buttons.ButtonAutoCook then
+            Varz.UI_Buttons.ButtonAutoCook:SetValue(false)
+        end
+        return false
+    end
+
+    -- Ensure offset is a safe number
+    local speedOffset = tonumber(CookingManager.SpeedOffset) or 0
+
+    -- 4. Main Processing Loop
+    for _uuid, _model in pairs(all_pots) do
+        -- Inner Loop Interrupts
+        if TaskManager.Is_MasterBusy() then
+            break
+        end
+        if not FOtherSettings.is_auto_cook then
+            break
+        end
+
+        -- STATE A: Pot is currently cooking
+        if CookingManager.GetIsCooking(_model) then
+            local timeleft = CookingManager.GetTimeLeftUntilDone(_model)
+            local time_txt = timeleft and timeleft or (_uuid .. " is cooking")
+
+            CookingManager.TimeDisplayPots[_uuid] = "🍲 Cooking Pot: " .. time_txt
+            CookingManager.Update_AllTimers()
+            continue
+        end
+
+        -- STATE B: Food is ready to collect
+        if CookingManager.IsReadyToCollect(_model) then
+            CookingManager.Update_AllStatus("🍔 Collecting from " .. _uuid)
+            CookingManager.TimeDisplayPots[_uuid] = "✅ Food is Ready "
+            CookingManager.Update_AllTimers()
+
+            CookingManager.GetFoodFromPot(_uuid)
+            task.wait(0.1 + speedOffset)
+            CookingManager.Update_AllStatus("✅ Collected from " .. _uuid)
+            continue
+        end
+
+        -- STATE C: Ready for new ingredients
+        if CookingManager.IsReadyForNewCooking(_model) then
+            -- Auto-unequip tools instead of complaining/waiting
+            unequipTools()
+            task.wait(0.1)
+
+            CookingManager.TimeDisplayPots[_uuid] = "⚪ Ready to cook "
+            CookingManager.Update_AllTimers()
+
+            -- Gather Ingredients
+            local list_fruits = CookingManager.GatherAllRequiredIngredients(_uuid)
+            if not list_fruits then
+                CookingManager.Update_AllStatus("⚡ No fruits found for " .. _uuid)
+                continue
+            end
+
+            -- Execution
+            CookingManager.Update_AllStatus("🍲 Adding fruits to " .. _uuid)
+            task.wait(0.05 + speedOffset)
+
+            Varz.IS_COOKING = true
+
+            -- Protected call in case submitting errors out, so IS_COOKING doesn't stay stuck true forever
+            local success, err = pcall(function()
+                CookingManager.SubmitAllFruits(_uuid, list_fruits)
+            end)
+
+            Varz.IS_COOKING = false
+
+            if success then
+                task.wait(0.05 + speedOffset)
+                CookingManager.Update_AllStatus("✅ All fruits submitted to " .. _uuid)
+            else
+                warn("Failed to submit fruits to pot:", err)
+            end
+        end
+    end
+
+    -- Safety Reset
+    Varz.IS_COOKING = false
+
+    return true
+end
 
 ---------------------------------------------------
 ------- End Cooking
@@ -34108,9 +35569,146 @@ local function M_UI_PLANTS()
 
     local gFruitShovel = UISellTab:AddRightGroupbox('🍉 Shovel Fruits', "chart-no-axes-column")
 
+    local gFavPlants = UISellTab:AddRightGroupbox('❤️ Favourite Fruit [Farm]', "chart-no-axes-column")
 
     -- #esp #fruitesp
     local gFruitEsp = UISellTab:AddLeftGroupbox('🌻 Fruit ESP', "chart-no-axes-column")
+
+
+    --====================================================
+    -- ❤️ Fav fruits #favui
+    --====================================================
+    if gFavPlants then
+        gFavPlants:AddLabel({
+            Text = "This will favourite fruits in your garden based on set filters.",
+            DoesWrap = true
+        })
+        --========= Weight
+        local GetMinWTextPetFav = function()
+            local stx = string.format("Min Weight <font color='#47FF40'>%s</font>", FOtherSettings.autofavminweight)
+            return stx
+        end
+
+        local GetMaxWTextPetFav = function()
+            local stx = string.format("Max Weight <font color='#FF4065'>%s</font>", FOtherSettings.autofavmaxweight)
+            return stx
+        end
+        local input_min_weightfav
+        input_min_weightfav = gFavPlants:AddInput("input_min_weightfav", {
+            Text = GetMinWTextPetFav(),
+            Default = FOtherSettings.autofavminweight,
+            Numeric = true,
+            AllowEmpty = true,
+            Finished = true,
+            ClearTextOnFocus = false,
+            Placeholder = "e.g 1",
+            Tooltip = "Specify minimum Weight",
+            Callback = function(Value)
+                local num = ParseWeightNumber(Value)
+
+                if not num or num <= 0 then
+                    Library:Notify("Invalid: " .. Value, 3)
+                    input_min_weightfav:SetValue(tostring(FOtherSettings.autofavminweight))
+                    return
+                end
+
+                if num > FOtherSettings.autofavmaxweight then
+                    Library:Notify("Can't be more than max weight", 3)
+                    input_min_weightfav:SetValue(tostring(FOtherSettings.autofavminweight))
+                    return
+                end
+
+                FOtherSettings.autofavminweight = num
+                SaveDataOther()
+                input_min_weightfav:SetText(GetMinWTextPetFav())
+            end
+        })
+
+        local input_max_weightfav
+        input_max_weightfav = gFavPlants:AddInput("input_max_weightfav", {
+            Text = GetMaxWTextPetFav(),
+            Default = FOtherSettings.autofavmaxweight,
+            Numeric = true,
+            AllowEmpty = true,
+            Finished = true,
+            ClearTextOnFocus = false,
+            Placeholder = "e.g 1",
+            Tooltip = "Specify maximum Weight",
+            Callback = function(Value)
+                local num = ParseWeightNumber(Value)
+
+                if not num or num <= 0 then
+                    Library:Notify("Invalid: " .. Value, 3)
+                    input_max_weightfav:SetValue(tostring(FOtherSettings.autofavmaxweight))
+                    return
+                end
+
+
+                if num < FOtherSettings.autofavminweight then
+                    Library:Notify("Can't be lower than min weight ", 3)
+                    input_max_weightfav:SetValue(tostring(FOtherSettings.autofavmaxweight))
+                    return
+                end
+
+                FOtherSettings.autofavmaxweight = num
+                SaveDataOther()
+                input_max_weightfav:SetText(GetMaxWTextPetFav())
+            end
+        })
+
+
+        local dd_plantsfavfilter = gFavPlants:AddDropdown("dd_plantsfavfilter", {
+            Values = {},
+            Default = {},
+            Multi = true,
+            Text = "🌴 Plants [Empty = all]",
+            Searchable = true,
+            MaxVisibleDropdownItems = 10,
+            Changed = function(newSelection)
+                if newSelection == nil then return end
+                FOtherSettings.autofavplantlist = newSelection
+                SaveDataOther()
+            end
+        })
+
+        dd_plantsfavfilter:SetValues(GetKeyValuesFromList(all_plants_list))
+        dd_plantsfavfilter:SetValue(FOtherSettings.autofavplantlist)
+
+
+        gFavPlants:AddToggle("enablefavfruits", {
+            Text = "❤️ Enable Fav",
+            Default = FOtherSettings.autofavfruits_enabled,
+            Tooltip = "When enabled it will auto fav fruits matching the filters set",
+            Callback = function(Value)
+                FOtherSettings.autofavfruits_enabled = Value
+                SaveDataOther()
+            end
+        })
+
+        gFavPlants:AddDivider()
+        gFavPlants:AddDivider()
+
+        gFavPlants:AddLabel({
+            Text = "⚠️Unfav uses same filters set above to unfav fruits.",
+            DoesWrap = true
+        })
+
+        gFavPlants:AddButton({
+            Text = "⚡ Unfav Farm fruits",
+            Func = function()
+                if FOtherSettings.autofavfruits_enabled then
+                    Library:Notify("Please disable favourite system above to run unfav.", 2)
+                    return
+                end
+                if TaskManager.FavouriteFruit.is_unfav_running then
+                    Library:Notify("Already running unfav", 2)
+                    return
+                end
+                Library:Notify("Unfav requested. Please wait.", 2)
+                TaskManager.FavouriteFruit.is_unfav_running = true
+            end,
+        })
+    end
 
     --====================================================
     -- 🌻  fruits esp #esp
@@ -35439,7 +37037,7 @@ local function MEventsUi()
     -- Groups
     --local eventJungle = UIEventsTab:AddLeftGroupbox("🌴 <font color='#228B22'>Jungle Event</font> 🍂", "tree")
 
-    local gFeedEvent = nil -- UIEventsTab:AddLeftGroupbox("🤖 Easter Garden Pets", "tasks")
+    local gFeedEvent = UIEventsTab:AddLeftGroupbox("🤖 Easter Garden Pets", "tasks")
 
     local gFallEvent = UIEventsTab:AddLeftGroupbox(type_fruit_event_name, "snowflake")
     local gQuest = UIEventsTab:AddLeftGroupbox("🍂 <font color='#FFD700'>Quests</font> 🌽", "tasks")
@@ -35464,12 +37062,9 @@ local function MEventsUi()
             Text = "💡 Pets in Easter Garden\n" ..
                 "1. Disable Pick & Place System\n" ..
                 "2. Disable Gifting / Trade System\n" ..
-                "3. Send a trade invite to your alt account\n" ..
-                "4. Send any item (e.g. fruit)\n" ..
-                "5. Accept the trade on both accounts\n" ..
-                "6. Confirm the trade on your alt account\n\n" ..
-                "➡️ Finally, use the 'Confirm & Switch Easter Garden' button below\n" ..
-                "   to confirm the trade and switch your garden slot\n\n" ..
+                "3. Send a trade ticket from your alt\n" ..
+                "4. Accept the Trade Ticket using button below.\n" ..
+                "5. Keep trade window active else pets will be removed.\n" ..
                 "⏱ Cooldown: 3 minutes between garden switches",
             DoesWrap = true
         })
@@ -35482,15 +37077,15 @@ local function MEventsUi()
 
 
         gFeedEvent:AddButton({
-            Text = "Confirm & Switch Easter G",
+            Text = "Accept & Switch Easter G",
             Func = function()
-                if not TaskManager.TradeSystem.IsTradeActive() then
-                    Library:Notify(
-                        "Trade must be active, and the other player must have already confirmed their side.",
-                        5
-                    )
-                    return
-                end
+                -- if not TaskManager.TradeSystem.IsTradeActive() then
+                --     Library:Notify(
+                --         "Trade must be active, and the other player must have already confirmed their side.",
+                --         5
+                --     )
+                --     return
+                -- end
 
                 if EventsManager.EasterEvent.IsEasterGarden() then
                     Library:Notify(
@@ -35500,9 +37095,10 @@ local function MEventsUi()
                     return
                 end
                 task.spawn(function()
-                    TaskManager.TradeSystem.TradeAcceptButton()
+                    --TaskManager.TradeSystem.TradeAcceptButton()
+                    _Helper.ClickTradeAccept()
                 end)
-                task.wait(0.2)
+                task.wait(0.1)
                 game:GetService("ReplicatedStorage").GameEvents.SaveSlotService.RequestChangeSlots:FireServer(
                     "EASTER_2026")
             end,
@@ -36479,9 +38075,9 @@ local function MEventsUi()
         })
 
         gFallEvent:AddToggle("autochocolatesprinklers", {
-            Text = "⚪ Chocolate Sprinkler",
+            Text = "⚪ Auto Sprinklers",
             Default = FOtherSettings.autoplacechocolatesprinkler,
-            Tooltip = "Auto places the chocolate sprinkler.",
+            Tooltip = "Auto places the chocolate sprinkler and gear shop sprinklers. Won't place GM",
             Callback = function(Value)
                 FOtherSettings.autoplacechocolatesprinkler = Value
                 SaveDataOther()
@@ -36491,10 +38087,45 @@ local function MEventsUi()
         gFallEvent:AddToggle("autobuyeggseaster", {
             Text = "🥚 Buy Easter Eggs",
             Default = FOtherSettings.autobuyeggs_event,
-            Tooltip = "Buys 12 eggs every 8 hour",
+            Tooltip = "Buys eggs",
             Callback = function(Value)
                 FOtherSettings.autobuyeggs_event = Value
                 SaveDataOther()
+            end
+        })
+
+
+        local maxeggstext = function()
+            local cc = FOtherSettings.autobuyeventeggsamount or 19
+            local st = string.format("🥚 Max <font color='#7CFC00'>Eggs</font> to Buy (%s)", cc)
+            return st
+        end
+
+        local inputasen_maxseedegg
+        inputasen_maxseedegg = gFallEvent:AddInput("eggseventbuy", {
+            Text = maxeggstext(),
+            Default = FOtherSettings.autobuyeventeggsamount,
+            Numeric = true,
+            AllowEmpty = true,
+            Finished = true,
+            ClearTextOnFocus = false,
+            Placeholder = "Enter seed count here",
+            Tooltip = "How many eggs to buy",
+            Callback = function(Value)
+                local num = ParseWholeNumber(Value)
+
+                if not num or num <= 0 then
+                    Library:Notify("Invalid Count: " .. Value, 3)
+                    inputasen_maxseedegg:SetValue(tostring(FOtherSettings.autobuyeventeggsamount))
+                    return
+                end
+
+                if num > 0 then
+                    -- Update time if valid
+                    FOtherSettings.autobuyeventeggsamount = num
+                    SaveDataOther()
+                    inputasen_maxseedegg:SetText(maxeggstext())
+                end
             end
         })
 
@@ -41125,146 +42756,6 @@ end
 
 
 
--- #shovel sprinkler
-if TaskManager.task_auto_shovel_sprinkler then
-    task.cancel(TaskManager.task_auto_shovel_sprinkler)
-    TaskManager.task_auto_shovel_sprinkler = nil
-end
-
-TaskManager.busy_task_auto_shovel_sprinkler = function()
-    if Varz.IS_GIFT or Varz.IS_COOKING or Varz.IS_FEEDING or Varz.IS_HATCHING or Varz.IS_LEVELUP_RUNNING or Varz.IS_SEEDING or Varz.IS_Sprinkler or Varz.IS_WATERING or Varz.IS_MUTATION_RUNNING then
-        return true
-    end
-    return false
-end
-
-TaskManager.AlreadyDeletedSprinklers = {}
--- #delete
-TaskManager.task_auto_shovel_sprinkler = task.spawn(function()
-    while true do
-        task.wait(3)
-
-        -- Pause
-        if Varz.IsPaused() then
-            task.wait(math.random(2, 5))
-            continue
-        end
-
-        if not FSettings.auto_remove_sprinklers then
-            continue
-        end
-
-        if TaskManager.busy_task_auto_shovel_sprinkler() then
-            task.wait(3)
-            continue
-        end
-
-        local anys = next(FSettings.auto_remove_sp_list)
-        if not anys then
-            task.wait(2)
-            continue
-        end
-
-        if IsSprinklerHeld() then
-            task.wait(1)
-            continue
-        end
-
-        local protecteditem = "Chocolate Sprinkler"
-        local dideq = false
-
-        for item_name, _v in pairs(FSettings.auto_remove_sp_list) do
-            local items = FarmManager.GetObjectsUsingName(item_name)
-
-            if item_name == protecteditem and TaskManager.AlreadyDeletedSprinklers[protecteditem] then
-                continue
-            end
-
-            if #items > 0 then
-                local tool = InventoryManager.GetShovel()
-                if not tool then continue end
-
-
-
-                if TaskManager.busy_task_auto_shovel_sprinkler() then break end
-                unequipTools()
-                EquipToolOnChar(tool)
-                dideq = true
-                for _, value in pairs(items) do
-                    if item_name == protecteditem and TaskManager.AlreadyDeletedSprinklers[protecteditem] then
-                        break
-                    end
-
-                    if TaskManager.busy_task_auto_shovel_sprinkler() then break end
-                    FarmManager.DeleteObject(value)
-                    task.wait(0.9)
-                    TaskManager.AlreadyDeletedSprinklers[item_name] = true
-                end
-            else
-                --warn("Nothing found for  " .. item_name)
-            end
-            task.wait(0.05)
-        end
-
-        if dideq then
-            unequipTools()
-        end
-    end
-end)
-
-
--- #sprinkler #place
-task.spawn(function()
-    while true do
-        task.wait(2)
-
-        if not FarmManager.IsDataFullyLoaded() or not FarmManager.IsFarmFullyLoaded() then
-            task.wait(10)
-            continue
-        end
-
-        if not FOtherSettings.enable_autoplacesprinklers then
-            task.wait(2)
-            continue
-        end
-
-        local spx = FOtherSettings.autoplacesprinklers or {}
-
-        --  _Helper.JsonPrint(EventsManager.EasterEvent.PlacedSprinklers)
-
-        if next(spx) == nil then
-            continue
-        end
-        local loc = EventsManager.EasterEvent.GetEasterSeedPlacementPoint()
-        for sName, value in pairs(spx) do
-            -- we must hold and place the sprinklers
-            task.wait()
-            if EventsManager.EasterEvent.PlacedSprinklers[sName] then
-                continue
-            end
-            local tool = InventoryManager.GetSprinklerUsingName(sName)
-            if tool then
-                unequipTools()
-                EquipToolOnChar(tool)
-                InventoryManager.PlaceSprinkler(loc)
-                -- print("Place sprinkler")
-                task.wait(0.5)
-                local ob = FarmManager.GetSprinklerOnFarm(sName)
-                if ob then
-                    -- we have it
-                    EventsManager.EasterEvent.PlacedSprinklers[sName] = true
-                end
-            else
-                -- print("not found ", sName)
-            end
-        end
-        if IsSprinklerHeld() then
-            unequipTools()
-        end
-    end
-end)
-
-
 
 
 
@@ -41332,208 +42823,6 @@ end
 Varz.trowel_count_total_to_move = 0
 Varz.trowel_current_moved = 0
 
--- Start Fall Event
-if not _G.TowerSRun then
-    _G.TowerSRun = task.spawn(function()
-        while true do
-            task.wait(1)
-
-            -- Pause
-            if Varz.IsPaused() then
-                task.wait(math.random(2, 5))
-                continue
-            end
-
-            if not _PlantsManager.trowel_is_running then
-                _PlantsManager.UpdateTrowelStatus("🔴 Not Running...")
-                task.wait(2)
-                continue
-            end
-
-            if Varz.IS_HATCHING or Varz.IS_MUTATION_RUNNING then
-                _PlantsManager.UpdateTrowelStatus("🥚 Paused: Hatching/Mutation in Progress.")
-                task.wait(15)
-                continue
-            end
-
-            Varz.trowel_count_total_to_move = 0
-            Varz.trowel_current_moved = 0
-
-            _PlantsManager.UpdateTrowelStatus("🟢 Active and running...")
-
-            -- start the process of moving plants
-            local posv3 = _PlantsManager.StringToVector3(FOtherSettings.trowel_saved_cframe)
-            if not posv3 then
-                _PlantsManager.UpdateTrowelStatus("🔴 Stopping location invalid...")
-                _PlantsManager.trowel_is_running = false
-                task.wait(3)
-                continue
-            end
-
-            --warn("Pos: " , tostring(posv3))
-
-            local plants_ar = _PlantsManager.GetAllPlantsOnFarmForTrowel(posv3)
-
-            -- Get trowel tool
-            local mtrowel = _PlantsManager.FindTrowelTool()
-            if not mtrowel then
-                _PlantsManager.UpdateTrowelStatus("🔴 Stopping no trowel found...")
-                _PlantsManager.trowel_is_running = false
-                task.wait(3)
-                continue
-            end
-
-            if plants_ar and #plants_ar == 0 then
-                _PlantsManager.UpdateTrowelStatus("🔴 Stopping no plants to move...")
-                _PlantsManager.trowel_is_running = false
-                task.wait(3)
-                continue
-            end
-
-            Varz.trowel_count_total_to_move = #plants_ar
-            local toolholdtries = 0
-
-            -- we have plants process them.
-            unequipTools()
-            task.wait(0.3)
-            EquipToolOnChar(mtrowel)
-
-            _PlantsManager.UpdateTrowelProgress("🔄 <font color='#32CD32'>Moving </font> " ..
-                Varz.trowel_current_moved .. "/" .. Varz.trowel_count_total_to_move)
-
-            for _, fruit in ipairs(plants_ar) do
-                local timeoutx = 30
-                while Varz.IS_MUTATION_RUNNING or Varz.IS_COOKING or Varz.IS_HATCHING or Varz.IS_SEEDING or Varz.IS_SHOVELING do
-                    if timeoutx <= 0 then
-                        break
-                    end
-                    _PlantsManager.UpdateTrowelStatus("🥚 Paused: Waiting for other tasks...")
-                    task.wait(3)
-                    timeoutx = timeoutx - 1
-                    continue
-                end
-
-                if _PlantsManager.trowel_is_running == false then
-                    _PlantsManager.UpdateTrowelStatus("❌ Stopped by user.")
-                    task.wait(1)
-                    break
-                end
-
-                local is_pick = _PlantsManager.PickUpPlantUsingTrowel(mtrowel, fruit)
-                if not is_pick then
-                    _PlantsManager.UpdateTrowelStatus("❌ Failed to pick up this plant...")
-                    task.wait(0.5)
-                    continue
-                end
-                task.wait(0.1)
-
-                if not IsToolHeld(mtrowel) then
-                    _PlantsManager.UpdateTrowelStatus("❌ Tool not held. Equip... ")
-                    unequipTools()
-                    task.wait(0.3)
-                    EquipToolOnChar(mtrowel)
-                    toolholdtries = toolholdtries + 1
-                    task.wait(1)
-
-                    if toolholdtries > 15 then
-                        break
-                    end
-                    continue
-                end
-
-                local placedplant = _PlantsManager.PlacePlantUsingTrowel(mtrowel, fruit, posv3)
-                task.wait(0.1)
-                if not placedplant then
-                    _PlantsManager.UpdateTrowelStatus("❌ Failed to place this plant...")
-                    task.wait(0.5)
-                    continue
-                end
-                _PlantsManager.UpdateTrowelProgress("🔄 <font color='#32CD32'>Moving </font> " ..
-                    Varz.trowel_current_moved .. "/" .. Varz.trowel_count_total_to_move)
-                --print("Moved: " , fruit.Name)
-
-                Varz.trowel_current_moved = Varz.trowel_current_moved + 1
-                _PlantsManager.UpdateTrowelStatus("🟢 Success " .. fruit.Name)
-                task.wait(0.1)
-            end
-
-            -- All moved
-            _PlantsManager.trowel_is_running = false
-            _PlantsManager.UpdateTrowelStatus(
-                "✅ All plants moved. if nothing moved please make sure to set cframe again and inside your farm.")
-            _PlantsManager.UpdateTrowelProgress("📊 Last Moved " ..
-                Varz.trowel_current_moved .. "/" .. Varz.trowel_count_total_to_move)
-            task.wait(0.1)
-            unequipTools()
-            task.wait(3)
-        end
-    end)
-end
-
-
-
-
-
--- #feed #feedloop
-Varz.feeding_cooldown_timer = 5
-
-if not _G.monsterfeedsy then
-    _G.monsterfeedsy = task.spawn(function()
-        while true do
-            task.wait(0.6)
-
-            -- Pause
-            if Varz.IsPaused() then
-                task.wait(math.random(2, 5))
-                continue
-            end
-            if not FOtherSettings.feeding_pets_auto then
-                -- not running..
-                MonsterFeeder.UpdateLblStatsText("🔴 Not running")
-                task.wait(math.random(2, 5))
-                continue
-            end
-
-            local timer_cd = tonumber(FOtherSettings.feeding_pets_timer)
-            if not timer_cd then
-                timer_cd = math.random(60, 120)
-            end
-            Varz.feeding_cooldown_timer = timer_cd
-
-            while Varz.feeding_cooldown_timer > 0 and FOtherSettings.feeding_pets_auto do
-                MonsterFeeder.UpdateLblStatsText("🟢 Active. Feed in " .. Varz.feeding_cooldown_timer .. "s")
-                Varz.feeding_cooldown_timer = Varz.feeding_cooldown_timer - 1
-                if not FOtherSettings.feeding_pets_auto then
-                    break
-                end
-                task.wait(1)
-            end
-
-            if Varz.IS_GIFT then
-                MonsterFeeder.UpdateLblStatsText("🟡 Hatching/Gift in process")
-                task.wait(math.random(1, 2))
-                continue
-            end
-
-            if FOtherSettings.feeding_pets_auto then
-                if not Varz.IS_FEEDING then
-                    Varz.IS_FEEDING = true
-
-                    local success, err = pcall(function()
-                        return MonsterFeeder.FeedHungryPets(FOtherSettings.force_feed_all_pets, true)
-                    end)
-
-                    if not success then
-                        warn("[PetFeeder] FeedHungryPets failed:", err)
-                    end
-
-                    Varz.IS_FEEDING = false
-                    task.wait(0.9)
-                end
-            end
-        end
-    end)
-end
 
 
 
@@ -41603,226 +42892,6 @@ TaskManager.task_open_packs = task.spawn(function()
 end)
 
 
--- #level
-if not _G.monsterlevels_task then
-    _G.monsterlevels_task = task.spawn(function()
-        while true do
-            Varz.IS_LEVELUP_RUNNING = false
-            task.wait(3)
-
-            -- Pause
-            if Varz.IsPaused() then
-                task.wait(math.random(2, 5))
-                continue
-            end
-
-            if not FOtherSettings.pet_auto_level_auto then
-                -- not running..
-                MonsterManager.LevelSystem.UpdateUiTextStats("🔴 Not running")
-                task.wait(math.random(2, 5))
-                continue
-            end
-
-            MonsterManager.LevelSystem.UpdateUiTextStats("🟢 Active and running")
-
-            local max_level = tonumber(FOtherSettings.pet_auto_level_max)
-            local min_level = tonumber(FOtherSettings.pet_auto_level_min)
-
-            if min_level > 0 then
-                if max_level <= min_level then
-                    MonsterManager.LevelSystem.UpdateUiTextStats(
-                        "❌ Max level can't be less than or equal to minimum level.")
-                    task.wait(math.random(2, 5))
-                    continue
-                end
-            end
-
-
-            local pets_to_level = {}
-            local idx = 0
-            for _, _uuid in ipairs(FOtherSettings.pet_level_selected_pets) do
-                local currentLvl = MonsterManager.LevelSystem.GetCurrentPetLevel(_uuid)
-                if currentLvl >= max_level then
-                    continue
-                end
-
-                if min_level > 0 then
-                    if currentLvl < min_level then
-                        continue
-                    end
-                end
-                table.insert(pets_to_level, _uuid)
-            end
-
-            if #pets_to_level == 0 then
-                MonsterManager.LevelSystem.UpdateUiTextStats("🟡 Not pets found to level..")
-                task.wait(2)
-                continue
-            end
-
-            MonsterManager.LevelSystem.DetailsPastBoosts = {}
-
-            Varz.IS_LEVELUP_RUNNING = true
-            for _, _uuid in ipairs(pets_to_level) do
-                idx = idx + 1
-                if not FOtherSettings.pet_auto_level_auto then break end
-                max_level = tonumber(FOtherSettings.pet_auto_level_max)
-                min_level = tonumber(FOtherSettings.pet_auto_level_min)
-
-                if Varz.IS_MUTATION_RUNNING or Varz.IS_JUNGLE_RUNNING or Varz.IS_HATCHING or Varz.IS_COOKING or Varz.IS_FEEDING or Varz.IS_SEEDING or Varz.IS_SHOVELING then
-                    MonsterManager.LevelSystem.UpdateUiTextStats("🟡 Tasks in progress")
-                    task.wait(math.random(3, 7))
-                    continue
-                end
-
-                local _petData = GetPetDataByUUID(_uuid)
-                if not _petData then
-                    continue
-                end
-
-                local PetData = _petData.PetData
-                local PetType = _petData.PetType -- name of the pet
-                local Level = PetData.Level
-
-                local pet_name = tostring(idx) .. "# " .. PetType
-
-                local _boosts = FOtherSettings.pet_level_boost_list
-                local currentLvl = Level
-
-                if currentLvl >= max_level then
-                    -- pet max level reached
-                    continue
-                end
-
-                -- Only proceed if _boosts is a string
-                if type(_boosts) ~= "string" then
-                    --warn("Pet boost is not a string, ignoring")
-                    MonsterManager.LevelSystem.UpdateUiTextStats("🟡 Select a boost")
-                    task.wait(3)
-                    break
-                end
-
-                local is_syrup = false
-                local is_gear_use = false
-                local _tool = nil
-
-
-                if string.find(_boosts, "Syrup") then
-                    is_syrup = true
-                    _tool = InventoryManager.GetToolUsingName(_boosts)
-                else
-                    _tool = InventoryManager.GetPetAnyBoostUsingName(_boosts)
-                end
-
-                if string.find(_boosts, "Jelly") then
-                    is_gear_use = true
-                    --Jack- O- Jelly [285x Uses]
-
-                    local _cleanname = CleanItemNameXpBoosts(_boosts)
-                    _tool = InventoryManager.GetToolUsingNameNormalised(_cleanname)
-                end
-
-
-                if not _tool then
-                    --warn("Don't have this boost: " .. _boosts)
-                    MonsterManager.LevelSystem.UpdateUiTextStats("🟡 Boost not found ")
-                    task.wait(3)
-                    break
-                end
-
-
-
-                local petmover = FarmManager.GetActivePetsPetMoverObject(_uuid)
-                if not petmover then
-                    MonsterManager.LevelSystem.UpdateUiTextStats("❌ Pet not found on farm.")
-                    task.wait(1)
-                    continue
-                end
-                if petmover:IsA("Part") then
-                    petmover = petmover:FindFirstChildOfClass("Model")
-                end
-
-
-
-
-
-
-                -- #level
-                MonsterManager.LevelSystem.UpdateUiTextStats("⚡ Applying boosts...")
-                if not EquipToolOnChar(_tool) then
-                    MonsterManager.LevelSystem.UpdateUiTextStats("🔴 Unable to equip tool.")
-                    task.wait(1)
-                    break
-                end
-
-                local lvl_give = 0
-                local needed_levels = max_level - currentLvl
-                local current_used_boosts = 0
-                local max_boost_allowed = 40
-
-                while needed_levels > 0 do
-                    if not IsToolHeldNew(_tool) then
-                        warn("Not holding tool")
-                        break
-                    end
-
-                    if current_used_boosts >= max_boost_allowed then
-                        break
-                    end
-
-
-
-                    -- ✅ Before using boost: capture current level
-                    local before = MonsterManager.LevelSystem.GetCurrentPetLevel(_uuid)
-
-                    -- Apply boost
-                    if is_syrup then
-                        InventoryManager.TryUseSyrup(petmover)
-                        task.wait(0.3)
-                    elseif is_gear_use then
-                        InventoryManager.TryUseGearBoost(_boosts, petmover)
-                        task.wait(1.2)
-                    else
-                        MonsterBoostManager.ApplyBoostToPet(_uuid)
-                    end
-
-                    task.wait(0.15)
-
-                    -- ✅ After using boost: re-read level
-                    local after = MonsterManager.LevelSystem.GetCurrentPetLevel(_uuid)
-
-                    -- ✅ Calculate actual number of levels gained
-                    local diff = after - before
-
-                    if diff > 0 then
-                        lvl_give = lvl_give + diff
-                        needed_levels = needed_levels - diff
-                    end
-
-                    current_used_boosts = current_used_boosts + 1
-
-                    MonsterManager.LevelSystem.DetailsPastBoosts[pet_name] = {
-                        cur = currentLvl,
-                        given_levels = lvl_give,
-                        target = max_level
-                    }
-
-                    MonsterManager.LevelSystem.UpdateUiTextInformation()
-
-                    -- Safety: stop if we hit max even if needed_levels logic lags
-                    if after >= max_level then
-                        break
-                    end
-                end
-
-                task.wait(0.3)
-                unequipTools()
-            end
-            MonsterManager.LevelSystem.UpdateUiTextStats("✅ Done applying boosts")
-            Varz.IS_LEVELUP_RUNNING = false
-        end
-    end)
-end
 
 
 Varz.FastCraftCancel = function()
@@ -41847,450 +42916,14 @@ Varz.FastCraftCancel = function()
     end
 end
 
--- #craft
-if TaskManager.craft_tasks_loop then
-    task.cancel(TaskManager.craft_tasks_loop)
-    TaskManager.craft_tasks_loop = nil
-end
 
-TaskManager.craft_tasks_loop = task.spawn(function()
-    while true do
-        task.wait(1)
-        -- Pause
-        if Varz.IsPaused() or Varz.IS_HATCHING then
-            task.wait(math.random(2, 5))
-            continue
-        end
 
-        if not FarmManager.IsDataFullyLoaded() or not FarmManager.IsFarmFullyLoaded() then
-            UPDATE_LABELS_FUNC.UpdateSetLblStats("🔴 Waiting for farm data to load.")
-            task.wait(10)
-            continue
-        end
 
-        local _event_enabled = FSettings.allcraft.auto_craft_event
 
-        if not _event_enabled then
-            -- not running..
-            CraftManager.Update_GearEventWorkbenchStatus("🔴 Not running")
-            CraftManager.Update_GearEventWorkbenchTimers("ℹ️ Select recipes and [Enable] to craft.")
-            task.wait(math.random(2, 5))
-            continue
-        end
 
-        for bName, _data in pairs(CraftManager.AllReceipeData) do
-            local rlist = FSettings.allcraft.receipe_data[bName]
-            if not rlist then
-                continue
-            end
 
-            -- Pause
-            if Varz.IsPaused() or Varz.IS_HATCHING then
-                task.wait(math.random(2, 5))
-                break
-            end
 
-            local hasRecipes = next(rlist) ~= nil
-            if not hasRecipes then
-                continue
-            end
 
-            -- Get current status
-            local current_step = CraftManager.GetWorkbenchStateUsingName(bName)
-            if current_step == nil then
-                continue
-            end
-
-            if Varz.IS_HATCHING then
-                CraftManager.Update_GearEventWorkbenchStatus("🟡 Hatching in process")
-                task.wait(math.random(3, 7))
-                break
-            end
-
-            if current_step == CraftManager.CraftStats.SKIP_CRAFT then
-                -- craft is process
-                --print("Craft in progress for : " .. bName)
-                CraftManager.CraftTeams.PlaceTeamIdle()
-                CraftManager.Update_GearEventWorkbenchStatus("🔨 " .. bName .. "🔨 is Crafting: ")
-                task.wait(0.5)
-                continue
-            end
-
-            if current_step == CraftManager.CraftStats.SELECT_RECIPE then
-                -- Ready, insert a recipe
-                --Varz.IS_CRAFTING = true
-                CraftManager.Update_GearEventWorkbenchStatus("🛠️ " .. bName .. " is Attempting Recipe...")
-                --print("🛠️ Attempting Recipe...")
-
-                local success, result = pcall(function()
-                    CraftManager.SetRecipeUsingName(bName)
-                end)
-
-                if success then
-                    if result == false then
-                        task.wait(3)
-                        local fail_r = CraftManager.Current_Recipe_MissingItemName
-                        CraftManager.Update_GearEventWorkbenchStatus("❌ Recipes <font color='#F527E7'>" ..
-                            CraftManager.Current_Recipe_Name ..
-                            "</font> are Missing <font color='#F08080'>" ..
-                            tostring(fail_r) .. "</font> - insufficient resources")
-                        warn("insufficient ", fail_r)
-                        task.wait(3)
-                        CraftManager.Current_Recipe_Name = ""
-                        CraftManager.Current_Recipe_MissingItemName = ""
-                        Varz.IS_CRAFTING = false
-                        continue
-                    end
-                else
-                    --warn(bName .. " failed: " .. tostring(err))
-                    CraftManager.Update_GearEventWorkbenchStatus("❌ " .. bName .. " Stop craft.")
-
-                    task.wait(2)
-                end
-                task.wait(2)
-                --Varz.IS_CRAFTING = false
-                continue
-            end
-
-
-            if current_step == CraftManager.CraftStats.START_CRAFTING then
-                -- Start crafting, press the submit button
-                CraftManager.CraftTeams.PlaceTeamSubmitItems()
-                CraftManager.StartCraftWorkbenchUsingName(bName)
-                CraftManager.Update_GearEventWorkbenchStatus("✅ " .. bName .. " Craft Started Successfully")
-                task.wait(1)
-                continue
-            end
-
-
-            if current_step == CraftManager.CraftStats.SUBMIT_ITEM then
-                -- Submit items
-                --warn("Submit items")
-                task.wait(1)
-                CraftManager.CancelWorkbenchUsingName(bName)
-                continue
-            end
-
-            if current_step == CraftManager.CraftStats.CLAIM_REWARDS then
-                -- Craft is complete, claim the items
-                -- claim rewards
-                CraftManager.CraftTeams.PlaceTeamClaimItems()
-                CraftManager.Update_GearEventWorkbenchStatus("🎁 Claiming Rewards")
-                --print("🎁 Claiming Rewards")
-                CraftManager.ClaimWorkbenchUsingName(bName)
-                CraftManager.Current_Recipe_Name = ""
-                task.wait(0.5)
-                CraftManager.Update_GearEventWorkbenchStatus("✅ Success")
-                CraftManager.Update_GearEventWorkbenchTimers("🟢 Waiting...")
-                continue
-            end
-
-            if not hasRecipes then
-                CraftManager.Update_GearEventWorkbenchStatus("🟢 Active nothing to craft. ")
-                warn("🟢 Active nothing to craft.")
-                task.wait(0.5)
-                continue
-            end
-        end
-    end
-end)
-
-
-
-
-if not Varz.threadCookingHandle then
-    Varz.threadCookingHandle = task.spawn(function()
-        while true do
-            task.wait(7 + CookingManager.SpeedOffset)
-
-            -- Pause
-            if Varz.IsPaused() then
-                task.wait(math.random(2, 5))
-                continue
-            end
-
-            if not FOtherSettings.is_auto_cook then
-                -- not running..
-                --warn("auto cook is not running")
-                CookingManager.Update_AllStatus("🔴 Not active or running")
-                CookingManager.TimeDisplayPots = {}
-                task.wait(math.random(1 + CookingManager.SpeedOffset, 3 + CookingManager.SpeedOffset))
-                continue
-            end
-
-            CookingManager.Update_AllStatus("🟢 Active and running")
-
-            local all_pots = CookingManager.GetAllCookingPots()
-            if not all_pots then
-                --warn("You dont have pots to cook on.")
-                CookingManager.Update_AllStatus("❌ No Cooking Pots found.. Stopping..")
-                local status = "Cooking stopped - you do not have any Cooking Pets."
-                Library:Notify(status, 4)
-                CookingManager.TimeDisplayPots = {}
-                CookingManager.Update_AllTimers()
-                FOtherSettings.is_auto_cook = false
-                SaveDataOther()
-
-                if Varz.UI_Buttons.ButtonAutoCook then
-                    Varz.UI_Buttons.ButtonAutoCook:SetValue(FOtherSettings.is_auto_cook)
-                end
-
-                task.wait(9 + CookingManager.SpeedOffset)
-                continue
-            end
-            -- prevent inf loops
-            local max_h_wait = 0
-            while Varz.IS_MUTATION_RUNNING or Varz.IS_Sprinkler or Varz.IS_HATCHING or Varz.IS_SHOVELING or Varz.IS_SEEDING do
-                if max_h_wait > 7 then
-                    break
-                end
-                CookingManager.Update_AllStatus("🟡 Paused: Other tasks in progress.")
-                max_h_wait = max_h_wait + 1
-                task.wait(5)
-            end
-
-            for _uuid, _model in pairs(all_pots) do
-                task.wait(1)
-
-                if CookingManager.GetIsCooking(_model) then
-                    local time_txt = _uuid .. " is cooking"
-                    local timeleft = CookingManager.GetTimeLeftUntilDone(_model)
-                    if timeleft then
-                        time_txt = timeleft
-                    end
-                    --warn("Already cooking " .. _uuid.. " Time: ".. time_txt)
-
-                    CookingManager.TimeDisplayPots[_uuid] = "🍲 Cooking Pot: " .. time_txt
-                    CookingManager.Update_AllTimers()
-                    task.wait(1)
-                    continue
-                end
-
-                -- is this ready to collect?
-                if CookingManager.IsReadyToCollect(_model) then
-                    -- collect
-                    CookingManager.Update_AllStatus("🍔 Collecting from " .. _uuid)
-                    CookingManager.TimeDisplayPots[_uuid] = "✅ Food is Ready "
-                    CookingManager.Update_AllTimers()
-                    CookingManager.GetFoodFromPot(_uuid)
-                    task.wait(0.01 + CookingManager.SpeedOffset)
-                    CookingManager.Update_AllStatus("✅ Collected from " .. _uuid)
-                    continue
-                end
-
-
-
-                if CookingManager.IsReadyForNewCooking(_model) then
-                    -- This pot is ready for cooking, process it
-
-                    local toolShovel = InventoryManager.GetShovel()
-                    -- is user holding any tool
-                    if IsToolHeldNew(toolShovel) then
-                        CookingManager.TimeDisplayPots[_uuid] =
-                        "⚠️ You are holding a tool <font color='#ff00ff'>[Shovel]</font>, waiting for you to unequip it..."
-                        CookingManager.Update_AllTimers()
-                        task.wait(math.random(4, 10))
-                        continue
-                    end
-
-
-                    CookingManager.TimeDisplayPots[_uuid] = "⚪ Ready to cook "
-                    CookingManager.Update_AllTimers()
-
-                    local list_fruits = CookingManager.GatherAllRequiredIngredients(_uuid)
-                    if not list_fruits then
-                        --warn("No fruits to add, skip " .. _uuid)
-                        CookingManager.Update_AllStatus("⚡ No fruits found for " .. _uuid)
-                        task.wait(2 + CookingManager.SpeedOffset)
-
-                        continue
-                    end
-                    CookingManager.Update_AllStatus("🍲 Adding fruits to " .. _uuid)
-                    task.wait(0.05 + CookingManager.SpeedOffset)
-                    Varz.IS_COOKING = true
-                    CookingManager.SubmitAllFruits(_uuid, list_fruits)
-                    Varz.IS_COOKING = false
-                    task.wait(0.05 + CookingManager.SpeedOffset)
-                    --warn("All fruits submitted "  .. _uuid)
-                    CookingManager.Update_AllStatus("✅ All fruits submitted to " .. _uuid)
-
-                    continue
-                end
-            end
-
-            task.wait(0.1 + CookingManager.SpeedOffset)
-        end
-    end)
-end
-
-
-
-
-
-
-
-
-
-
--- # shovel plants
-if not _G.shovel_all_plants then
-    _G.shovel_all_plants = task.spawn(function()
-        while true do
-            Varz.IS_SHOVELING = false
-            task.wait(5)
-
-            -- Pause
-            if Varz.IsPaused() then
-                task.wait(math.random(2, 5))
-                continue
-            end
-
-            while not FarmManager.IsDataFullyLoaded() or not FarmManager.IsFarmFullyLoaded() do
-                if UI_Dropdown.ShovelDropDown then
-                    UI_Dropdown.ShovelDropDown:SetText("⚠️ Loading...")
-                end
-
-                task.wait(1)
-                continue
-            end
-
-
-
-            if not ShovelManager.isLoaded then
-                ShovelManager.UpdateCurrentPlantsInFarm()
-                task.wait(1)
-                if UI_Dropdown.ShovelDropDown then
-                    UI_Dropdown.ShovelDropDown:SetText("⛏️ Plants to Shovel")
-                end
-
-                ShovelManager.isLoaded = true
-            end
-
-
-            if not FOtherSettings.is_auto_shovel then
-                -- Only care about manual active state
-                if not ShovelManager.IsActive then
-                    ShovelManager.UpdateStatus("🔴 Auto-Shovel Disabled")
-                    task.wait(math.random(1, 2))
-                    continue
-                else
-                    -- Manual run in progress
-                    ShovelManager.UpdateStatus("🟡 Auto-Shovel Running (Manual)")
-                end
-            else
-                -- Auto mode is ON -> always runs
-                ShovelManager.UpdateStatus("🟢 Auto-Shovel Running (Auto)")
-            end
-
-            task.wait(0.7)
-
-            --  Get all plants to remove
-            local del_plants = ShovelManager.Plant.GetPlantsToDestroy()
-            local count_plants = #del_plants
-
-            if count_plants <= 0 then
-                ShovelManager.UpdateStatus("🔴 Nothing to shovel")
-                task.wait(3)
-                continue
-            end
-
-            ShovelManager.UpdateStatus("🟢 Active and running...")
-            task.wait(0.5)
-            -- current amount for these plants
-            -- ["Apple"] = {amount: 300}
-
-            local plant_count = FarmManager.GetPlantCountByNameArrayTable(del_plants)
-            local max_keep = FOtherSettings.shovel_keep_amount
-
-            -- check if we can destroy any plants
-            local plants_under_limit = ""
-            local allowed_del = {}
-            local not_allow = {}
-            for _, plantx in ipairs(del_plants) do
-                if plant_count[plantx.Name] ~= nil then
-                    if plant_count[plantx.Name] > max_keep then
-                        -- can del this
-                        table.insert(allowed_del, plantx)
-                    else
-                        not_allow[plantx.Name] = true
-                    end
-                end
-            end
-
-            for _itemname, value in pairs(not_allow) do
-                plants_under_limit = plants_under_limit .. " " .. _itemname .. " under-limit[Skipped]\n"
-            end
-
-            if #allowed_del == 0 then
-                if not FOtherSettings.is_auto_shovel then
-                    ShovelManager.UpdateStatus("🔴 Cannot delete any plants. Stopping... " .. plants_under_limit)
-                    ShovelManager.IsActive = false
-                    Library:Notify("Shovel Stopped", 1)
-                else
-                    ShovelManager.UpdateStatus("🔴 Nothing to delete, trying again soon in 10s. " .. plants_under_limit)
-                    task.wait(10)
-                    continue
-                end
-
-                task.wait(3)
-                continue
-            end
-
-            -- delete plants
-            local tool = InventoryManager.GetShovel()
-            unequipTools()
-            EquipToolOnChar(tool)
-            task.wait(0.7)
-
-            ShovelManager.UpdateStatus("🟡 Removing plants from your farm...")
-            Varz.IS_SHOVELING = true
-            ShovelManager.IsActive = true
-            for _, plant in ipairs(allowed_del) do
-                if not ShovelManager.IsActive then
-                    break
-                end
-                max_keep = FOtherSettings.shovel_keep_amount
-
-                while Varz.IS_MUTATION_RUNNING or Varz.IS_HATCHING or Varz.IS_FEEDING or Varz.IS_COOKING or Varz.IS_SEEDING do
-                    ShovelManager.UpdateStatus("🟡 Paused due to other tasks in progress...")
-                    task.wait(2)
-                    continue
-                end
-
-                ShovelManager.UpdateStatus("🟡 Removing plants from your farm...")
-
-                if not IsToolHeldNew(tool) then
-                    unequipTools()
-                    EquipToolOnChar(tool)
-                    task.wait(0.7)
-                end
-
-                if plant_count[plant.Name] ~= nil then
-                    if plant_count[plant.Name] <= max_keep then
-                        -- we cant shovel this plant anymore
-                        --warn("Skipped plant "..plant_count[plant.Name] ..  " / ".. max_keep)
-                        ShovelManager.UpdateProgressInformation(plant_count)
-                        continue
-                    end
-                end
-
-                if plant_count[plant.Name] ~= nil then
-                    -- destroy it
-                    ShovelManager.Plant.DeletePlant(plant)
-                    plant_count[plant.Name] = plant_count[plant.Name] - 1
-                end
-                ShovelManager.UpdateProgressInformation(plant_count)
-                task.wait(0.7)
-                --warn("Plant destoryed")
-            end
-            ShovelManager.IsActive = false
-            unequipTools()
-            task.wait(1)
-            Varz.IS_SHOVELING = false
-            ShovelManager.UpdateStatus("🟢 Shovelling Complete")
-        end
-    end)
-end
 
 
 
@@ -42413,224 +43046,6 @@ TaskManager.seedeventtasker = task.spawn(function()
 end)
 
 
--- #seed system
-if not _G.seedplacementrun then
-    _G.seedplacementrun = task.spawn(function()
-        local function isbusy_seed()
-            if Varz.IS_MUTATION_RUNNING or Varz.IS_Sprinkler or Varz.IS_JUNGLE_RUNNING or Varz.IS_HATCHING or Varz.IS_SHOVELING or Varz.IS_COOKING or Varz.IS_WATERING then
-                return true
-            end
-            return false
-        end
-
-        while true do
-            task.wait(3)
-
-            if not FarmManager.IsDataFullyLoaded() or not FarmManager.IsFarmFullyLoaded() then
-                SeedManager.Labels.updateStats("🔴 Waiting for farm data to load.")
-                task.wait(5)
-                continue
-            end
-
-
-            -- Pause
-            if Varz.IsPaused() then
-                task.wait(math.random(2, 5))
-                continue
-            end
-
-            if not FOtherSettings.is_auto_seed then
-                if not SeedManager.IsActive then
-                    SeedManager.Labels.updateStats("🔴 Auto-Seed Disabled")
-                    Varz.IS_SEEDING = false
-                    task.wait(math.random(1, 2))
-                    continue
-                else
-                    SeedManager.Labels.updateStats("🟡 Auto-Seed Running (Manual)")
-                end
-            else
-                SeedManager.Labels.updateStats("🟢 Auto-Seed Running")
-            end
-
-            SeedManager.Labels.updateStats("🟢 Auto-Seed Running")
-            task.wait(0.4)
-
-            if Varz.IS_SEEDING then
-                SeedManager.Labels.updateStats("🔴 Other systems are placing seeds. Will retry...")
-                task.wait(1.9)
-                continue
-            end
-
-            if isbusy_seed() then
-                SeedManager.Labels.updateStats("⏸️ Paused: Other tasks in progress...")
-                task.wait(2)
-                continue
-            end
-
-            -- find all plants on the farm and see if we can place more. remove any we can't place
-            local seeds_to_place, plantedCounts = SeedManager.Seeds.GetSeedsToPlaceFiltered()
-            if not seeds_to_place then
-                if not FOtherSettings.is_auto_seed then
-                    SeedManager.Labels.updateStats("🔴 No seeds to place...")
-                    SeedManager.IsActive = false
-                    Library:Notify("Stopping seed placement.", 2)
-                    task.wait(2)
-                    continue
-                end
-                SeedManager.Labels.updateStats("🟡 No seeds to place...")
-                task.wait(3)
-                continue
-            end
-
-
-
-            local center = FarmManager.mFarm.Center_Point.Position
-            local availablePositions = getGridSeedPositions(center)
-
-            -- Is it random placement?
-            local placePos = availablePositions[math.random(1, #availablePositions)]
-            -- does user need to be teleported?
-            local hrp = _S.Character:WaitForChild("HumanoidRootPart")
-            local originalCFrame = hrp.CFrame
-
-            local isRandomPos = FOtherSettings.is_seed_random
-            local max_keep = FOtherSettings.seed_keep_amount
-            local userDefinedPosition
-            if not isRandomPos then
-                userDefinedPosition = _Helper.StringToVector3(FOtherSettings.seed_location_vector)
-
-                -- start the process of moving plants
-                if not userDefinedPosition then
-                    SeedManager.Labels.updateStats("🔴 Location is not valid, please select a new location.")
-                    task.wait(9)
-                    continue
-                end
-
-                if _PlantsManager.IsWithinRangeOfFarm(center, userDefinedPosition) then
-                    SeedManager.Labels.updateStats("🔴 Current Location is not within your farm.")
-                    task.wait(9)
-                    continue
-                end
-            end
-
-            -- are we close to the farm?
-            local currentPlacePos = _PlantsManager.GetCurrentCFrameFromPlayerString()
-            local currentPlacePosV3 = _PlantsManager.StringToVector3(currentPlacePos)
-
-            local didTp = false
-            if _PlantsManager.IsWithinRangeOfFarm(center, currentPlacePosV3) then
-                TeleportPlayerToCFrame(_Helper.Vector3ToCFrame(center))
-                didTp = true
-            end
-
-            if userDefinedPosition then
-                placePos = userDefinedPosition
-            end
-
-
-            SeedManager.IsActive = true
-            SeedManager.Labels.updateStats("🌱 Attempting to place seeds...")
-            local is_stop = false
-            Varz.IS_SEEDING = true
-            for seedName, amount in pairs(seeds_to_place) do
-                if not SeedManager.IsActive then
-                    break
-                end
-                if Varz.is_garden_full_seed then
-                    SeedManager.Labels.updateStats("⏸️ Garden is full")
-                    task.wait(2)
-                    break
-                end
-
-                if is_stop then
-                    break
-                end
-
-                local _seedTool = InventoryManager.GetSeedUsingName(seedName)
-                if not _seedTool then
-                    task.wait(0.1)
-                    continue
-                end
-                unequipTools()
-                if not EquipToolOnChar(_seedTool) then
-                    task.wait(0.1)
-                    continue
-                end
-                task.wait(0.3)
-
-                for i = 1, amount, 1 do
-                    task.wait()
-                    if not SeedManager.IsActive then
-                        break
-                    end
-                    if Varz.is_garden_full_seed then
-                        SeedManager.Labels.updateStats("⏸️ Garden is full")
-                        task.wait(2)
-                        break
-                    end
-                    local timeout = 30
-
-                    if isbusy_seed() then
-                        SeedManager.Labels.updateStats("⏸️ Paused: Other tasks in progress...")
-                        is_stop = true
-                        task.wait(1)
-                        break
-                    end
-
-                    SeedManager.Labels.updateStats("🌱 Attempting to place seeds...")
-
-                    if isRandomPos then
-                        placePos = availablePositions[math.random(1, #availablePositions)]
-                    end
-
-                    if not _seedTool then
-                        break
-                    end
-
-                    if not IsToolHeldNew(_seedTool) then
-                        if not _seedTool then
-                            break
-                        end
-                        unequipTools()
-                        if not EquipToolOnChar(_seedTool) then
-                            task.wait(1)
-                            break
-                        end
-                        task.wait(0.3)
-                    end
-
-
-                    if plantedCounts[seedName] ~= nil then
-                        if plantedCounts[seedName] >= max_keep then
-                            SeedManager.Labels.updateInformation(plantedCounts)
-                            continue
-                        end
-                    end
-
-                    if plantedCounts[seedName] ~= nil then
-                        -- plant it
-                        _FruitCollectorMachine.PlantSeed(placePos, seedName)
-                        plantedCounts[seedName] = plantedCounts[seedName] + 1
-                    end
-                    SeedManager.Labels.updateInformation(plantedCounts)
-                    local speedx = FOtherSettings.seed_speed_timer1
-                    task.wait(speedx)
-                end
-            end
-            if didTp then
-                TeleportPlayerToCFrame(originalCFrame)
-            end
-
-            unequipTools()
-            SeedManager.IsActive = false
-            SeedManager.Labels.updateStats("🟢 Seed placements complete")
-            task.wait(1)
-            Varz.IS_SEEDING = false
-        end
-    end)
-end
-
-
 
 
 -- seed system
@@ -42721,200 +43136,6 @@ end
 
 
 
--- #shovel fruits #fruit #shovelfruit #fruitloop
-if TaskManager.shovelfruitsx_loop then
-    task.cancel(TaskManager.shovelfruitsx_loop)
-    TaskManager.shovelfruitsx_loop = nil
-end
-
-TaskManager.shovelfruitsx_loop = task.spawn(function()
-    while true do
-        task.wait(1)
-
-        if not FarmManager.IsFarmFullyLoaded() or not FarmManager.IsDataFullyLoaded() then
-            ShovelManager.Fruit.UpdateStatusFruit("🔴 Farm is still loading...")
-            task.wait(5)
-            continue
-        end
-
-        if not ShovelManager.Fruit.IsEnabled() then
-            ShovelManager.Fruit.UpdateStatusFruit("🔴 Not enabled")
-            task.wait(3)
-            continue
-        end
-
-        ShovelManager.Fruit.UpdateStatusFruit("🟢 Active and running.")
-        if ShovelManager.Fruit.IsBusy() then
-            ShovelManager.Fruit.UpdateStatusFruit("🟡 Other tasks in progress.")
-            task.wait(3)
-            continue
-        end
-        task.wait(0.1)
-        ShovelManager.Fruit.UpdateStatusFruit("🚨 Trying to find and delete.")
-        ShovelManager.Fruit.DoFruitsDeleteTask()
-    end
-end)
-
-
-
-
-
-
-
-
-
-
--- #water system
-if not _G.letswater_task then
-    _G.letswater_task = task.spawn(function()
-        local function is_busy()
-            if Varz.IS_MUTATION_RUNNING or Varz.IS_Sprinkler or Varz.IS_HATCHING or Varz.IS_SEEDING or Varz.IS_JUNGLE_RUNNING or Varz.IS_FEEDING or Varz.IS_SHOVELING or Varz.IS_COOKING or Varz.IS_LEVELUP_RUNNING then
-                return true
-            end
-            return false
-        end
-
-        while true do
-            Varz.IS_WATERING = false
-            task.wait(5)
-
-            -- Pause
-            if Varz.IsPaused() then
-                task.wait(math.random(2, 5))
-                continue
-            end
-
-            if not FarmManager.IsFarmFullyLoaded() or not FarmManager.IsDataFullyLoaded() then
-                WaterManager.UI.UpdateStatus("🔴 Farm is still loading...")
-                task.wait(1)
-                continue
-            end
-
-
-            if not FOtherSettings.watering_is_auto then
-                WaterManager.UI.UpdateStatus("🔴 Not Running")
-                task.wait(1)
-                continue
-            end
-
-
-            local waterf = InventoryManager.GetWateringCan("Watering Can")
-            if not waterf then
-                -- dont have cans, skip
-                WaterManager.UI.UpdateStatus("❌ You do not have watering cans.")
-                task.wait(8)
-                continue
-            end
-
-            WaterManager.UI.UpdateStatus("🟢 Active and Running")
-            task.wait(1)
-            WaterManager.UI.UpdateProgress("")
-
-            if is_busy() then
-                WaterManager.UI.UpdateStatus("ℹ️ Other tasks in progress..")
-                task.wait(1)
-                continue
-            end
-
-
-            local not_grown = WaterManager.Plants.GetPlantsNotGrown()
-            local found_trees_count = #not_grown
-            WaterManager.UI.UpdateStatus("ℹ️ Found " .. tostring(found_trees_count) .. " plants to water.")
-
-            if found_trees_count <= 0 then
-                WaterManager.UI.UpdateStatus("❌ No plants to water.")
-                task.wait(2)
-                continue
-            end
-
-
-
-            if IsSprinklerHeld() then
-                continue
-            end
-
-            if waterf then
-                unequipTools()
-                task.wait(0.1)
-                EquipToolOnChar(waterf)
-                task.wait(0.1)
-            end
-
-            local amount = tonumber(FOtherSettings.watering_amount_to_water)
-            local speed_water = tonumber(FOtherSettings.watering_speed_time)
-            local plant_limit = 20
-            local current_water = 0
-
-            Varz.IS_WATERING = true
-            local is_stop = false
-            for _, tree in ipairs(not_grown) do
-                if not FOtherSettings.watering_is_auto then break end
-
-                local pos = _FruitCollectorMachine.GetPlantPosition(tree)
-                if not pos then
-                    continue
-                end
-                if not waterf then
-                    break
-                end
-                if current_water > plant_limit then
-                    --warn(" Plant limit reached")
-                    break
-                end
-                if is_stop then
-                    break
-                end
-
-                if IsSprinklerHeld() then
-                    break
-                end
-
-                WaterManager.UI.UpdateStatus("🟢 Watering in progress...")
-                WaterManager.UI.UpdateProgress("💧 Watering " .. tree.Name)
-                local water_cans_used = 0
-                for i = 1, amount, 1 do
-                    if Varz.IS_HATCHING or Varz.IS_SEEDING then
-                        is_stop = true
-                        break
-                    end
-
-                    if not waterf then
-                        break
-                    end
-
-
-                    if IsSprinklerHeld() then
-                        break
-                    end
-
-                    if not IsToolHeldNew(waterf) then
-                        unequipTools()
-                        if not EquipToolOnChar(waterf) then
-                            is_stop = true
-                            break
-                        end
-                        task.wait(0.3)
-                    end
-                    water_cans_used = water_cans_used + 1
-                    InventoryManager.UseWateringCan(pos)
-                    WaterManager.UI.UpdateProgress("💧 Watering " ..
-                        tree.Name .. "  " .. tostring(water_cans_used) .. "/" .. amount)
-                    task.wait(speed_water)
-                end
-
-                task.wait(0.5)
-                current_water = current_water + 1
-            end
-            WaterManager.UI.UpdateStatus("🟢 Watering completed...")
-            unequipTools()
-            Varz.IS_WATERING = false
-        end
-    end)
-end
-
-
-
-
 
 
 
@@ -42963,6 +43184,84 @@ if not _G.sp_service_task then
         end
     end)
 end
+
+
+
+
+
+TaskManager.Is_MasterBusy = function()
+    if Varz.IsPaused() or Varz.IS_HATCHING or Varz.IS_GIFT or TaskManager.reclaim_running then
+        return true
+    end
+    return false
+end
+
+
+-- #gameloop Tool hold tasks. like feeding etc
+task.spawn(function()
+    while true do
+        task.wait(1)
+
+        if Varz.IsPaused() then
+            task.wait(4)
+            continue
+        end
+
+        if not FarmManager.IsDataFullyLoaded() or not FarmManager.IsFarmFullyLoaded() then
+            task.wait(4)
+            continue
+        end
+
+        -- unfav
+        if TaskManager.FavouriteFruit.is_unfav_running then
+            TaskManager.FavouriteFruit.UnfavouriteFruits()
+            TaskManager.FavouriteFruit.is_unfav_running = false
+        end
+
+        -- fav fruits in farm
+        TaskManager.FavouriteFruit.FavFruitsLoop()
+
+        -- Sprinkler place #sprinkler
+        EventsManager.EasterEvent.AutoPlaceSprinklersTemp() -- move to sprinklers task manager later after easter event
+        TaskManager.Sprinklers.DeleteSprinklers()
+
+        -- #event
+        EventsManager.EasterAngryPlant.FeedRequiredPlant()
+        EventsManager.EasterEvent.StartEggHunt()
+        EventsManager.EasterEvent.LoopFindAndCollectEggs()
+        EventsManager.EasterEvent.PlacePlantsEaster()
+
+
+        -- WATER PLANTS #water
+        WaterManager.UI.WaterLoop()
+
+        -- SEED PLACER #seed
+        SeedManager.SeedLoop()
+
+        -- Trowel plants #trowel
+        _PlantsManager.TrowelLoop()
+
+        -- #Shovel fruits
+        ShovelManager.Fruit.DoFruitsDeleteTask()
+
+        -- #shovel plants
+        ShovelManager.Plant.PlantShovelTask()
+
+        -- #feed
+        MonsterFeeder.FeedPetsLoop()
+
+        -- #level
+        MonsterManager.LevelSystem.LevelPetsLoop()
+
+        -- #craft
+        CraftManager.CraftLoop()
+
+        -- #cook
+        CookingManager.CookLoop()
+    end
+end)
+
+
 
 
 
