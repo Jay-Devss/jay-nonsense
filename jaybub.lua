@@ -223,7 +223,7 @@ end
 
 -- #start
 _S.AppName = "Exotic Hub"
-_S.CurentV = "v1.43.4"
+_S.CurentV = "v1.43.6"
 
 local Varz = {}
 Varz.dev_tools = true
@@ -646,6 +646,9 @@ local FOtherSettings = {
     magpie_status                              = {},
     magpie_recordstatus                        = true,
 
+    bearded_dragon_egg_status                  = {},
+    bearded_dragon_recordstatus                = true,
+
     -- jungle
     is_auto_jungle                             = false,
 
@@ -818,6 +821,7 @@ local FSettings = {
         allow_mutation_list = {},
         custom_pets_list = {},
         allow_player_targets = {},
+        send_trading_ticket_auto = false,
         enabled_gift_pets = false,
         enabled_auto_trade = false,
         auto_confirm_accept = false,
@@ -843,6 +847,7 @@ local FSettings = {
     sell_mode_hatch_selected = false,
     auto_fav_after_hatch = true,
     eggs_center_mode1 = false,
+    clover_method = false,
     rng_use_system = false,
     rng_auto_rejoin = false,
     rng_egg_lowers_up = false,
@@ -931,7 +936,6 @@ local FSettings = {
     seedpack = {
         is_active = false,
         selected_packs = {},
-        openwithoutui = false,
     },
     auto_restartjoin_server = false,
     auto_rejoin_after_hatchcount = 30,
@@ -4039,6 +4043,7 @@ GameDataManager.GetPlayerPetSellEggRefundChance = function()
 end
 
 
+-- #player
 GameDataManager.PlayerData = {
     GetSealChance = function()
         local dx = _S.LocalPlayer:GetAttribute("PetSellEggRefundChance") or 0
@@ -4051,6 +4056,14 @@ GameDataManager.PlayerData = {
     GetBrontoChance = function()
         local dx = _S.LocalPlayer:GetAttribute("PetEggHatchSizeBonus") or 0
         return tonumber(dx)
+    end,
+    GetUnfairTradeWarning = function()
+        local dx = _S.LocalPlayer:GetAttribute("UnfairTradeWarning") or nil
+        if not dx then return false end
+        if dx and dx == true then
+            return true
+        end
+        return false
     end
 }
 
@@ -5918,13 +5931,15 @@ InventoryManager.OpenSeedPackFast = function(_name)
 
         if pack and pack.Open and pack.SpinFinished then
             pack.Open:FireServer(_name)
-            task.wait(1)
+            task.wait(0.1)
             pack.SpinFinished:FireServer()
         end
     end)
 
     if not success then warn(" Failed to open SeedPack: " .. tostring(err)) end
 end
+
+
 
 InventoryManager.OpenSeedPack = function(_name)
     if not _name or type(_name) ~= "string" then return warn("Invalid pack name") end
@@ -6016,6 +6031,38 @@ InventoryManager.GetWateringCan = function(_ToolName)
 end
 
 
+InventoryManager.GetTradingTicket = function()
+    local _ToolName = "Trading Ticket"
+    for _, item in ipairs(_S.Backpack:GetChildren()) do
+        if not item:IsA("Tool") then continue end
+        if not item:GetAttribute("b") then
+            continue
+        end
+
+        if item:GetAttribute("b") ~= "v" then
+            continue
+        end
+        if string.find(item.Name, _ToolName, 1, true) then
+            return item
+        end
+    end
+
+    -- Check equipped tool
+    local item = _S.Character and _S.Character:FindFirstChildOfClass("Tool")
+    if item then
+        if not item:GetAttribute("b") then
+            return nil
+        end
+
+        if item:GetAttribute("b") ~= "v" then
+            return nil
+        end
+        if string.find(item.Name, _ToolName, 1, true) then
+            return item
+        end
+    end
+    return nil
+end
 
 -- #petteam
 InventoryManager.GetPetTeamData = function(_uuids)
@@ -8017,83 +8064,186 @@ GameDataManager.IsAllowedPackOpen = function()
     return true
 end
 
-GameDataManager.IsAllowedSellPet = function()
+GameDataManager.IsAllowedSellPet  = function()
     if Varz.IS_DIG or Varz.QUEST_TASK_RUNNING or Varz.IS_COOKING or Varz.IS_HATCHING or Varz.IS_CRAFTING or Varz.IS_LEVELUP_RUNNING or Varz.IS_SEEDING or Varz.IS_WATERING or Varz.IS_Sprinkler or Varz.IS_SHOVELING then
         return false
     end
     return true
 end
 
-GameDataManager.LoopPackOpenerAuto = function()
-    if not FSettings.seedpack.is_active then
-        return false
-    end
-    local selected_packs = FSettings.seedpack.selected_packs
-    if next(selected_packs) == nil then
-        return false
-    end
-
-    if not GameDataManager.IsAllowedPackOpen() then
-        return false
-    end
-
-    if FSettings.seedpack.openwithoutui then
-        if _S.PlayerGui:FindFirstChild("RollCrate_UI") then
-            _S.PlayerGui.RollCrate_UI:Destroy()
-        end
-    end
 
 
 
+-- #pack
+Varz.TEXT_PACK_REWARD = ""
+GameDataManager.PackOpen = {
 
-    for Name, value in pairs(selected_packs) do
-        if not GameDataManager.IsAllowedPackOpen() then
-            break
+    GetSeedPackRewardFromResult = function(resultData)
+        local ReplicatedStorage = game:GetService("ReplicatedStorage")
+        local SeedPackData = require(ReplicatedStorage.Data.SeedPackData)
+
+        if type(resultData) ~= "table" then
+            return nil
         end
 
-        -- Pause
-        if Varz.IsPaused() then
-            break
+        local seedPackType = resultData.seedPackType
+        local resultIndex = resultData.resultIndex
+
+        if not seedPackType or not resultIndex then
+            return nil
         end
 
+        local packData = SeedPackData.Packs[seedPackType]
+        if not packData or not packData.Items then
+            return nil
+        end
+
+        local reward = packData.Items[resultIndex]
+        if not reward then
+            return nil
+        end
+
+        return {
+            packName = seedPackType,
+            index = resultIndex,
+            type = reward.Type,
+            rewardId = reward.RewardId,
+            name = SeedPackData:GetTextDisplayForItem(reward),
+            raw = reward
+        }
+    end,
+
+    BypassSeedAnimations = function()
+        local delayTime = 0.1
+
+        local ok, err = pcall(function()
+            local ReplicatedStorage = game:GetService("ReplicatedStorage")
+            local Players = game:GetService("Players")
+
+            local SeedPackController = require(ReplicatedStorage.Modules.SeedPackController)
+
+            if SeedPackController.__BypassHooked then
+                return true
+            end
+
+            SeedPackController.__OriginalSpin = SeedPackController.Spin
+
+            SeedPackController.Spin = function(self, resultData)
+                local rewardInfo = GameDataManager.PackOpen.GetSeedPackRewardFromResult(resultData)
+
+                if rewardInfo then
+                    local rewardName = rewardInfo.name or ""
+                    local rewardPackName = rewardInfo.packName or ""
+                    -- print("Pack:", rewardInfo.packName)
+                    -- print("Reward:", rewardInfo.name)
+                    -- print("Type:", rewardInfo.type)
+                    -- print("RewardId:", rewardInfo.rewardId)
+
+                    local txt1x = string.format(
+                        "[%s] <b><font color='#00FF7F'>Got:</font></b> <font color='#FFFFFF'>%s</font>", rewardPackName,
+                        rewardName)
+
+                    Varz.TEXT_PACK_REWARD = txt1x
+                end
+
+                task.spawn(function()
+                    task.wait(delayTime)
+
+
+                    local player = Players.LocalPlayer
+                    local playerGui = player and player:FindFirstChild("PlayerGui")
+                    local rollGui = playerGui and playerGui:FindFirstChild("RollCrate_UI")
+                    local frame = rollGui and rollGui:FindFirstChild("Frame")
+                    local skipButton = frame and frame:FindFirstChild("Skip")
+
+                    -- 🔹 fire skip
+                    if skipButton and getconnections then
+                        for _, conn in ipairs(getconnections(skipButton.Activated)) do
+                            pcall(function()
+                                conn:Fire()
+                            end)
+                        end
+                    end
+
+                    -- 🔥 instantly hide UI (this is the key part)
+                    task.wait(0.05)
+
+                    if rollGui then
+                        rollGui.Enabled = false
+                    end
+
+                    if frame then
+                        frame.Visible = false
+                    end
+                end)
+
+                return SeedPackController.__OriginalSpin(self, resultData)
+            end
+
+            SeedPackController.__BypassHooked = true
+        end)
+
+        if not ok then
+            warn("SeedPack animation bypass failed: " .. tostring(err))
+            return false
+        end
+
+        return true
+    end,
+
+    OpenPack = function(_name)
+        if not _name or type(_name) ~= "string" then return print("Invalid pack name") end
+
+        local success, err = pcall(function()
+            local pack = _S.GameEvents.SeedPack
+
+            if pack and pack.Open and pack.SpinFinished then
+                pack.Open:FireServer(_name)
+                task.wait(0.3)
+                pack.SpinFinished:FireServer()
+            end
+        end)
+
+        if not success then warn(" Failed to open SeedPack: " .. tostring(err)) end
+    end,
+
+    MainLoopPacks = function()
         if not FSettings.seedpack.is_active then
-            break
+            return false
         end
-        local tool = InventoryManager.GetSeedPackUsingName(Name)
-        if not tool then
-            --warn("Not found: " .. Name)
-            continue
+        local selected_packs = FSettings.seedpack.selected_packs
+        if next(selected_packs) == nil then
+            return false
         end
-        if tool then
-            unequipTools()
-            task.wait(0.1)
-            EquipToolOnChar(tool)
-            for i = 1, 100, 1 do
-                if not GameDataManager.IsAllowedPackOpen() then
-                    break
-                end
-                if not tool then
-                    break
-                end
 
-                if not FSettings.seedpack.is_active then
-                    break
-                end
+        GameDataManager.PackOpen.BypassSeedAnimations()
+        for Name, value in pairs(selected_packs) do
+            if not FSettings.seedpack.is_active then
+                break
+            end
 
+            local tool = InventoryManager.GetSeedPackUsingName(Name)
+            if not tool then
+                continue
+            end
+
+            if not IsToolHeld(tool) then
+                if not EquipToolOnChar(tool) then return continue end
+            end
+
+            for i = 1, 10, 1 do
                 if not IsToolHeld(tool) then
                     break
                 end
-
-
-                InventoryManager.OpenSeedPackFast(Name)
-
-                task.wait(1)
+                GameDataManager.PackOpen.OpenPack(Name)
+                task.wait(0.1)
             end
         end
-    end
 
-    return true
-end
+        return true
+    end
+}
+
 
 
 ---------- FRUIT Collection Machine
@@ -14487,9 +14637,71 @@ end
 
 ----------END Seed system
 
+_Helper.getColorFromName = function(name)
+    if type(name) ~= "string" or #name == 0 then
+        return "#969696"
+    end
 
+    local hash = 0
+    for i = 1, #name do
+        local byte = string.byte(name, i)
+        if byte then
+            hash = (hash * 31 + byte) % 16777215
+        end
+    end
 
+    local r = bit32.rshift(hash, 16) % 256
+    local g = bit32.rshift(hash, 8) % 256
+    local b = hash % 256
 
+    local lower = name:lower()
+    local isTrash = lower:find("common") ~= nil or lower:find("uncommon") ~= nil
+
+    if isTrash then
+        local avg = math.clamp(math.floor((r + g + b) / 3), 120, 180)
+        return string.format("#%02X%02X%02X", avg, avg, avg)
+    else
+        r = math.clamp(r + 60, 0, 255)
+        g = math.clamp(g + 60, 0, 255)
+        b = math.clamp(b + 60, 0, 255)
+        return string.format("#%02X%02X%02X", r, g, b)
+    end
+end
+
+-- #dragon
+_Helper.UpdateDragonEggRewardsText = function()
+    if not UI_LABELS.lbl_dragon_item_collected then
+        return
+    end
+
+    -- Build display lines
+    local info_lines = {}
+
+    -- Calculate total (since you don’t store it separately)
+    local total = 0
+    for _, count in pairs(FOtherSettings.bearded_dragon_egg_status or {}) do
+        total = total + count
+    end
+
+    -- Total line
+    table.insert(info_lines, string.format(
+        "Total Collected: <b><font color='#EF2E92'>%d</font></b>",
+        total
+    ))
+
+    -- Item breakdown
+    for itemName, itemCount in pairs(FOtherSettings.bearded_dragon_egg_status or {}) do
+        local color = _Helper.getColorFromName(itemName)
+        table.insert(info_lines, string.format(
+            "<font color='%s'>%s</font>: <b>%d</b>", color,
+            itemName,
+            itemCount
+        ))
+    end
+
+    -- Update UI
+    UI_LABELS.lbl_dragon_item_collected:SetText(table.concat(info_lines, "\n"))
+end
 
 
 -- #magpie
@@ -14533,6 +14745,7 @@ task.spawn(function()
     while true do
         task.wait(3)
         TaskManager.MagpieSystem.UpdateUiCurrentItems()
+        _Helper.UpdateDragonEggRewardsText()
     end
 end)
 
@@ -16526,6 +16739,77 @@ TaskManager.GiftSystem = {
 
 -- #trade
 TaskManager.TradeSystem = {
+
+    GetValidPlayersForTrade = function()
+        local validplayers = {}
+
+        for _name, value in pairs(FSettings.giftpets.allow_player_targets) do
+            if TaskManager.Targets_max[_name] then
+                -- This user has full inventory
+                continue
+            end
+
+            local playerx = Varz.IsPlayerActiveUsingName(_name)
+            if not playerx then
+                continue
+            end
+
+            local dx = {
+                player = playerx,
+                player_name = _name
+            }
+
+            table.insert(validplayers, dx)
+        end
+
+        if #validplayers <= 0 then
+            return nil
+        end
+
+        return validplayers
+    end,
+
+    SendTradeTicketToPlayer = function(player)
+        game:GetService("ReplicatedStorage").GameEvents.TradeEvents.SendRequest:FireServer(player)
+    end,
+
+    LoopSendTicket = function()
+        if GameDataManager.PlayerData.GetUnfairTradeWarning() then
+            local ui_text = TaskManager.GiftSystem.UpdateUiGiftSystem
+            ui_text(
+                "🔴 Please disable UnfairTradeWarning from Trade (Button) > Settings (tab) to use trading system. ")
+            return
+        end
+
+        if not FSettings.giftpets.send_trading_ticket_auto then return end
+
+        if _Helper.IsSellAllUnFav() and FSettings.is_running then
+            return
+        end
+
+        if TaskManager.TradeSystem.IsTradeActive() then return end
+
+        local target_players = TaskManager.TradeSystem.GetValidPlayersForTrade()
+
+        if not target_players then return end
+
+        local tool = InventoryManager.GetTradingTicket()
+        if not tool then return end
+
+        if not EquipToolOnChar(tool) then return end
+
+        for index, playerdata in ipairs(target_players) do
+            local ob_player = playerdata.player
+            if not ob_player then
+                continue
+            end
+            if TaskManager.TradeSystem.IsTradeActive() then break end
+            local player_name = playerdata.player_name
+            --  print("Send ticket to  ", ob_player.Name)
+            TaskManager.TradeSystem.SendTradeTicketToPlayer(ob_player)
+            task.wait(1)
+        end
+    end,
 
     TradeAcceptButton = function()
         local players = game:GetService("Players")
@@ -23609,6 +23893,32 @@ Varz.MagPieNoti = function(text)
     end
 end
 
+-- #dragon
+Varz.BeardedDragonEggNoti = function(text)
+    if not FOtherSettings.bearded_dragon_recordstatus then
+        return
+    end
+
+    text = tostring(text or ""):gsub("<.->", "")
+
+    -- must contain BOTH phrases
+    if not text:find("stashed away", 1, true) then return end
+    if not text:find("found a", 1, true) and not text:find("found an", 1, true) then return end
+
+    -- clean after filtering
+    text = text:gsub("[^%w%s]", "")
+    text = text:gsub("%s+", " ")
+    text = text:match("^%s*(.-)%s*$")
+
+    -- extract egg
+    local eggName = text:match("found an? (.- Egg)$")
+    if not eggName then return end
+
+    FOtherSettings.bearded_dragon_egg_status[eggName] =
+        (FOtherSettings.bearded_dragon_egg_status[eggName] or 0) + 1
+
+    SaveDataOther()
+end
 
 
 
@@ -23820,6 +24130,8 @@ local function HandleNotificationX(arg)
     if strongContains(arg, ev_magpie) then
         Varz.MagPieNoti(arg)
     end
+
+    Varz.BeardedDragonEggNoti(arg)
 
     if strongContains(arg, ev_acorn_added) then
         --warn("Notification: "..tostring(arg));
@@ -26911,6 +27223,18 @@ local function IsPetStillActiveInContainer(uuid)
     return false
 end
 
+
+Varz.CheckTeamActiveOnField = function(team)
+    if not team or #team == 0 then return false end
+    -- must be a array . not key/value
+    for index, uuid in ipairs(team) do
+        if not IsPetStillActiveInContainer(uuid) then return false end
+    end
+
+    return true
+end
+
+
 _Helper.IsByPassPetsTeamEnabled = function()
     if not Varz.GetCheckIfPro() then return false end
     if FSettings.team_bypass_enabled and FSettings.is_running then
@@ -28795,6 +29119,11 @@ _Helper.AddTeamRubyWithSeal = function()
     return eq
 end
 
+Varz.GetCloverBasedHatching = function()
+    if not Varz.GetCheckIfPro() then return false end
+    return FSettings.clover_method
+end
+
 
 
 -- #hatch
@@ -28851,23 +29180,37 @@ local function SessionLoop()
         Varz.IS_HATCHING = true
         if FSettings.disable_team3 == false then
             -- Place team only if eggs need reduction
+            local is_team_placed_reduction = Varz.CheckTeamActiveOnField(FSettings.team3)
+
+
             if is_ready_hatch == false then
                 -- place team
+                local can_place_reduction = true
                 UPDATE_LABELS_FUNC.UpdateSetLblStats("🔄 Placing egg reduction team.")
 
-                if UnEquipAllPets() == false then
-                    UPDATE_LABELS_FUNC.UpdateSetLblStats("❌ Failed to unequip team. Restarting.")
-                    task.wait(2 + _Helper.GetSafePing())
-                    Varz.IS_HATCHING = false
-                    continue -- Restart the loop
+                -- Check if egg reduction team is already on the map.
+
+                if is_team_placed_reduction and Varz.GetCloverBasedHatching() then
+                    UPDATE_LABELS_FUNC.UpdateSetLblStats("⚠️ Reduction team is already placed.")
+                    can_place_reduction = false
+                    task.wait(0.3)
                 end
-                local eq_team = EquipPets(FSettings.team3)
-                if not eq_team then
-                    UPDATE_LABELS_FUNC.UpdateSetLblStats("❌ Failed to place egg reduction team. Restarting.")
-                    task.wait(3 + _Helper.GetSafePing())
-                    Varz.IS_HATCHING = false
-                    continue -- Restart the loop
+                if can_place_reduction then
+                    if UnEquipAllPets() == false then
+                        UPDATE_LABELS_FUNC.UpdateSetLblStats("❌ Failed to unequip team. Restarting.")
+                        task.wait(2 + _Helper.GetSafePing())
+                        Varz.IS_HATCHING = false
+                        continue -- Restart the loop
+                    end
+                    local eq_team = EquipPets(FSettings.team3)
+                    if not eq_team then
+                        UPDATE_LABELS_FUNC.UpdateSetLblStats("❌ Failed to place egg reduction team. Restarting.")
+                        task.wait(3 + _Helper.GetSafePing())
+                        Varz.IS_HATCHING = false
+                        continue -- Restart the loop
+                    end
                 end
+
                 task.wait(0.3 + _Helper.GetSafePing())
                 _Helper.StartTimer(_key)
                 start_timer = true
@@ -28894,7 +29237,7 @@ local function SessionLoop()
                 end)
 
                 if not success then
-                    warn("Issue with advanced team placement: ", status_ad)
+                    warn("Issue with advanced team placement: ", fail)
                 end
             end
         end
@@ -29097,7 +29440,9 @@ local function SessionLoop()
         got_eggs_back = 0
         recovered_eggs = 0
 
-        UnEquipAllPets()
+        if not Varz.GetCloverBasedHatching() then
+            UnEquipAllPets()
+        end
 
         if FSettings.pet_pickplace_enabled then
             --task.wait(5)
@@ -29164,8 +29509,12 @@ local function SessionLoop()
 
         --================= HATCH CYCLE ================= #koi
         -- Place Hatching Team (Team 2)
-        if FSettings.disable_team2 == false then
-            if GameDataManager.PlayerData.GetKoiChance() < 50 then
+        local cloverEnabled = Varz.GetCloverBasedHatching() == true
+        local koiChance = GameDataManager.PlayerData.GetKoiChance()
+        local was_hatch_team_placed = false
+
+        if not (cloverEnabled and koiChance >= 50) then
+            if FSettings.disable_team2 == false then
                 if UnEquipAllPets() == false then
                     UPDATE_LABELS_FUNC.UpdateSetLblStats("❌ Failed to unequip team. Restarting.")
 
@@ -29185,13 +29534,15 @@ local function SessionLoop()
                     Varz.IS_HATCHING = false
                     continue -- Restart the loop
                 end
+
+                was_hatch_team_placed = true
             end
         end
 
         UPDATE_LABELS_FUNC.UpdateSetLblStats("⏳ Waiting for hatch buffs")
         --task.wait(3.5+ _Helper.GetSafePing())
         -- #fast
-        if GameDataManager.PlayerData.GetKoiChance() < 50 then
+        if not (cloverEnabled and koiChance >= 50) then
             if _Helper.GetFastHatchMode() then
                 if _Helper.GetUltraMode() then
                     task.wait(0.5 + _Helper.GetSafePing())
@@ -29232,11 +29583,16 @@ local function SessionLoop()
         Varz.hatched_pets = {}
 
         local timeoutx = time()
-        while Varz.tracked_bonus_egg_recovery < 1 do
-            task.wait(0.5)
-            if time() - timeoutx > 2 then
-                break
+
+        if not (cloverEnabled and koiChance >= 50) then
+            while Varz.tracked_bonus_egg_recovery < 1 do
+                task.wait(0.5)
+                if time() - timeoutx > 2 then
+                    break
+                end
+                Varz.tracked_bonus_egg_recovery = GameDataManager.GetPlayerEggRecovery()
             end
+        else
             Varz.tracked_bonus_egg_recovery = GameDataManager.GetPlayerEggRecovery()
         end
 
@@ -29274,26 +29630,37 @@ local function SessionLoop()
         end
 
         -- we no longer need hatching team to be equipped
-        UnEquipAllPets()
+        if was_hatch_team_placed then
+            UnEquipAllPets()
+        end
 
         -- #fast
-        if _Helper.GetFastHatchMode() then
-            task.wait(0.5 + _Helper.GetSafePing())
-        elseif FSettings.hatch_slow_mode then
-            task.wait(5 + _Helper.GetSafePing())
-        else
-            task.wait(1.5 + _Helper.GetSafePing())
+        if not (cloverEnabled and koiChance >= 50) then
+            if _Helper.GetFastHatchMode() then
+                task.wait(0.5 + _Helper.GetSafePing())
+            elseif FSettings.hatch_slow_mode then
+                task.wait(5 + _Helper.GetSafePing())
+            else
+                task.wait(1.5 + _Helper.GetSafePing())
+            end
         end
 
 
         -- ============ BIG PET HATCH #big
         -- These pets can be hatched using pets that can increase size.
+
+        local cloverEnabled = Varz.GetCloverBasedHatching() == true
+        local brontoChance = GameDataManager.PlayerData.GetBrontoChance()
+
+        local needsBrontoTeam = not (cloverEnabled and brontoChance >= 30)
+        local was_big_team_placed = false
+
         if #Varz.big_pets_hatch_models > 0 then
             -- We have big pets to hatch
 
             -- place big pets hatching team here...
             -- Team 4 is big size pet team
-            if GameDataManager.PlayerData.GetBrontoChance() < 30 then
+            if needsBrontoTeam then
                 if FSettings.disable_team4 == false then
                     Varz.SetDisablePickPlaceFor(4)
                     if UnEquipAllPets(true) == false then
@@ -29321,6 +29688,8 @@ local function SessionLoop()
                         continue -- Restart the loop
                     end
 
+                    was_big_team_placed = true
+
                     -- Apply boosts to big pet team
                     if FSettings.hatch_boost_bron_enabled then
                         UPDATE_LABELS_FUNC.UpdateSetLblStats("Applying Boosts!")
@@ -29334,7 +29703,7 @@ local function SessionLoop()
             if FSettings.auto_hatch_big_pets == true then
                 UPDATE_LABELS_FUNC.UpdateSetLblStats("Hatching big pets.");
 
-                if GameDataManager.PlayerData.GetBrontoChance() < 30 then
+                if needsBrontoTeam then
                     task.wait(7 + _Helper.GetSafePing()) -- wait for buffs
                 end
 
@@ -29356,7 +29725,7 @@ local function SessionLoop()
                 UPDATE_LABELS_FUNC.UpdateSetLblStats("Hatching Big Pets Complete.")
 
 
-                if GameDataManager.PlayerData.GetBrontoChance() < 30 then
+                if needsBrontoTeam then
                     -- #fast
                     if _Helper.GetFastHatchMode() then
                         task.wait(3 + _Helper.GetSafePing())
@@ -29367,8 +29736,10 @@ local function SessionLoop()
                     end
                 end
             end
-            UnEquipAllPets()
-            task.wait(0.1 + _Helper.GetSafePing())
+            if was_big_team_placed then
+                UnEquipAllPets()
+                task.wait(0.1 + _Helper.GetSafePing())
+            end
         end
 
 
@@ -29509,9 +29880,10 @@ local function SessionLoop()
 
         --warn("Can we sell?: ", can_sell)
 
-        -- =================== #sell
+        -- =================== #sell #seal
         -- =================== Place Selling Team (Team 1)
         -- ===================
+        local seals_team_placed = false
         if can_sell then
             if FSettings.disable_team1 == false then
                 if UnEquipAllPets(true) == false then
@@ -29552,6 +29924,8 @@ local function SessionLoop()
                     Varz.IS_HATCHING = false
                     continue -- Restart the loop
                 end
+
+                seals_team_placed = true
             end
 
             UPDATE_LABELS_FUNC.UpdateSetLblStats("💰 Selling pets...")
@@ -29651,7 +30025,10 @@ local function SessionLoop()
         --================= CLEANUP AND REPORTING =================
 
         UPDATE_LABELS_FUNC.UpdateSetLblStats("🤖 Placing new eggs...")
-        UnEquipAllPets()
+        if seals_team_placed then
+            UnEquipAllPets()
+        end
+
         -- lock enhance system
         _Helper.LockEnhance(true)
         -- #place  #eggs #egg
@@ -31734,6 +32111,12 @@ TaskManager.gift_loops = task.spawn(function()
 
 
         if not FSettings.giftpets.enabled_gift_pets then
+            if FSettings.giftpets.enabled_auto_trade then
+                ui_text("🟢 Only Trade System is enabled.")
+                task.wait(2)
+                continue
+            end
+
             ui_text("🔴 Not Enabled")
             task.wait(2)
             continue
@@ -31922,15 +32305,25 @@ TaskManager.tradex_loops = task.spawn(function()
 
 
         -- Check for auto accept
-        if TaskManager.TradeSystem.OtherPlayerReady() then
-            --  print("Accept trade")
-            if TaskManager.TradeSystem.IsTradeActive() then
-                if FSettings.giftpets.auto_confirm_accept then
+
+        if FSettings.giftpets.auto_confirm_accept then
+            if GameDataManager.PlayerData.GetUnfairTradeWarning() then
+                ui_text(
+                    "🔴 Please disable UnfairTradeWarning from Trade (Button) > Settings (tab) to use trading system. ")
+                task.wait(3)
+                continue
+            end
+
+
+            if TaskManager.TradeSystem.OtherPlayerReady() then
+                --  print("Accept trade")
+                if TaskManager.TradeSystem.IsTradeActive() then
                     TaskManager.TradeSystem.TradeAcceptButton()
                     continue
                 end
             end
         end
+
 
         if not FSettings.giftpets.enabled_auto_trade then
             --ui_text("🔴 Not Enabled")
@@ -31948,7 +32341,8 @@ TaskManager.tradex_loops = task.spawn(function()
         local pets = TaskManager.GiftSystem.GetAllPetsForGifting()
 
         if #pets == 0 then
-            ui_text("❌ No pets to trade.")
+            ui_text(
+                "❌ No pets to trade. Make sure to remove pets from target teams or mutation teams if they are added as targets.")
             task.wait(3)
             continue
         end
@@ -31963,6 +32357,10 @@ TaskManager.tradex_loops = task.spawn(function()
 
         if TaskManager.TradeSystem.MyAddedItemsCount() >= 12 then
             ui_text("🟡 Trade max items already added.")
+            if FSettings.giftpets.send_trading_ticket_auto then
+                -- auto accept
+                TaskManager.TradeSystem.TradeAcceptButton()
+            end
             task.wait(2)
             continue
         end
@@ -33765,6 +34163,21 @@ Varz.ProUi = function()
         })
 
         gHatchOptionsAdvanced:AddDivider()
+        local toggleclover_method = gHatchOptionsAdvanced:AddToggle("toggleclover_method", {
+            Text =
+            "<b><stroke color='#003B2E' thickness='2'><font color='#00FFAA'>🍀 Clover Bonus MODE</font></stroke></b>",
+            Default = FSettings.clover_method,
+            Tooltip =
+            "Removes all timers. removes unequip for teams if the clover boost provides maximum boosts.",
+            DisabledTooltip = "Pro Feature",
+            Callback = function(Value)
+                FSettings.clover_method = Value
+                SaveData()
+            end
+        })
+
+
+        gHatchOptionsAdvanced:AddDivider()
         gHatchOptionsAdvanced:AddDivider()
         gHatchOptionsAdvanced:AddDivider()
         local toggleauto_fav_after_hatch = gHatchOptionsAdvanced:AddToggle("auto_fav_after_hatch", {
@@ -33781,6 +34194,7 @@ Varz.ProUi = function()
         if not Varz.GetCheckIfPro() then
             toggleExtremeMode:SetDisabled(true)
             toggleultradmode:SetDisabled(true)
+            toggleclover_method:SetDisabled(true)
         end
 
         gHatchOptionsAdvanced:AddDivider()
@@ -35545,7 +35959,7 @@ Varz.ProUi = function()
             Values = {},
             Default = {},
             Multi = true,
-            Text = "⚔️ Players",
+            Text = "⚔️Target Players",
             Searchable = true,
             MaxVisibleDropdownItems = 10,
             Changed = function(newSelection)
@@ -35611,6 +36025,20 @@ Varz.ProUi = function()
             "When enabled it finds and adds pets following gift settings",
             Callback = function(Value)
                 FSettings.giftpets.enabled_auto_trade = Value
+                SaveData()
+            end
+        })
+
+
+        gGift:AddDivider()
+        local toggleEnableGiftting = gGift:AddToggle("xsend_trading_ticket_auto", {
+            Text =
+            "🎟️ Auto Send Ticket 🧬",
+            Default = FSettings.giftpets.send_trading_ticket_auto,
+            Tooltip =
+            "When enabled it will send trade tickets to the target users and also auto accept after adding the pets.",
+            Callback = function(Value)
+                FSettings.giftpets.send_trading_ticket_auto = Value
                 SaveData()
             end
         })
@@ -38575,20 +39003,8 @@ local function M_UI_PLANTS()
         ddseedpacksselect:SetValues(Varz.all_seed_pack_names)
         ddseedpacksselect:SetValue(FSettings.seedpack.selected_packs)
 
-        SeedPackGroup:AddToggle("togglepacksWithout", {
-            Text = "🚨 Open Without UI",
-            Default = FSettings.seedpack.openwithoutui,
-            Tooltip = "Destroys the ui and keeps opening the packs. to get ui back disable this and reload.",
-            Callback = function(Value)
-                FSettings.seedpack.openwithoutui = Value
-                SaveData()
-            end
-        })
-
-        SeedPackGroup:AddDivider()
-
         SeedPackGroup:AddToggle("togglepacksopen", {
-            Text = "⚡ Open Packs",
+            Text = "⚡ Enablle OpenPacks",
             Default = FSettings.seedpack.is_active,
             Tooltip = "Automatically opens any selected packs.",
             Callback = function(Value)
@@ -41188,9 +41604,33 @@ local function UiPetsSideTab()
 
     local gMagpieUi = PetsTab:AddRightGroupbox(titlemagpiemethod)
 
+    local gDragon = PetsTab:AddRightGroupbox("Bearded Dragon")
+
+
+    -- #dragon
+
+    if gDragon then
+        gDragon:AddToggle("trackwardsEggsdragon", {
+            Text = "🥚 Track Eggs",
+            Default = FOtherSettings.bearded_dragon_recordstatus,
+            Tooltip = "If enabled will count and track eggs from shop",
+            Callback = function(Value)
+                FOtherSettings.bearded_dragon_recordstatus = Value
+                SaveDataOther()
+            end
+        })
+
+        gDragon:AddDivider()
+        gDragon:AddDivider()
+
+        UI_LABELS.lbl_dragon_item_collected = gDragon:AddLabel({
+            Text = "",
+            DoesWrap = true
+        })
+        gDragon:AddDivider()
+    end
+
     -- #magpie #magpieui
-
-
     if gMagpieUi then
         gMagpieUi:AddToggle("trackwardspie", {
             Text = "🔍 Track Rewards",
@@ -45524,36 +45964,6 @@ TaskManager.task_sellpets = task.spawn(function()
 end)
 
 
--- #pack
-if TaskManager.task_open_packs then
-    task.cancel(TaskManager.task_open_packs)
-    TaskManager.task_open_packs = nil
-end
-
-TaskManager.task_open_packs = task.spawn(function()
-    while true do
-        task.wait(7)
-
-        -- Pause
-        if Varz.IsPaused() then
-            task.wait(math.random(2, 5))
-            continue
-        end
-
-        if not FSettings.seedpack.is_active then
-            task.wait(3)
-            continue
-        end
-
-        Varz.IS_PACKOPEN = true
-        GameDataManager.LoopPackOpenerAuto()
-        Varz.IS_PACKOPEN = false
-    end
-end)
-
-
-
-
 Varz.FastCraftCancel = function()
     local bName = "GearEventWorkbench"
     CraftManager.CancelWorkbenchUsingName(bName)
@@ -45575,13 +45985,6 @@ Varz.FastCraftCancel = function()
         CraftManager.CancelWorkbenchUsingName(bName)
     end
 end
-
-
-
-
-
-
-
 
 
 
@@ -45899,6 +46302,12 @@ task.spawn(function()
         -- Clean #clean
         TaskManager.CleanSystem.CleanPetsOnFarm()
 
+        -- trade
+        TaskManager.TradeSystem.LoopSendTicket()
+
+        -- open packs / chests
+        GameDataManager.PackOpen.MainLoopPacks()
+
 
         -- WATER PLANTS #water
         WaterManager.UI.WaterLoop()
@@ -46176,6 +46585,22 @@ if not _G.service_ui_labelupdates then
 
             if FSessionDx.is_trading_world_mode then
                 table.insert(tbl_stats, Varz.TEXT_TRADE_WORLD)
+            end
+
+
+
+            if FSettings.seedpack.is_active then
+                local prewardtxxt = Varz.TEXT_PACK_REWARD or ""
+
+                local txtccx = string.format(
+                    "🎁 <stroke color='#000000' thickness='1'>"
+                    .. "<font color='#FFC857'>[Pack Open]</font> "
+                    .. "<font color='#FFFFFF'>%s</font>"
+                    .. "</stroke>",
+                    prewardtxxt
+                )
+
+                table.insert(tbl_stats, txtccx)
             end
 
             if FSettings.clean_system_enabled then
@@ -47700,61 +48125,92 @@ end
 
 _S.ReplicatedStorage.GameEvents.Finish_Loading:FireServer()
 
+Varz.SimulateRealMobileTap = function()
+    local Players = game:GetService("Players")
+    local VirtualInputManager = game:GetService("VirtualInputManager")
 
-Varz.FireSensorOnce = function()
-    local success = pcall(function()
-        local player = game:GetService("Players").LocalPlayer
-        if not player then return end
+    local player = Players.LocalPlayer
+    if not player then return false end
 
-        local playerGui = player:FindFirstChild("PlayerGui")
-        if not playerGui then return end
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if not playerGui then return false end
 
-        local billboard = playerGui:WaitForChild("BillboardGui", 5)
-        if not billboard then return end
+    local gui = Instance.new("ScreenGui")
+    gui.IgnoreGuiInset = true
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 999999
+    gui.Parent = playerGui
 
-        local button = billboard:FindFirstChild("SENSOR")
-        if not button or not button:IsA("GuiButton") then return end
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.fromScale(1, 1)
+    btn.BackgroundTransparency = 1
+    btn.TextTransparency = 1
+    btn.Text = ""
+    btn.Parent = gui
 
-        if not getconnections then return end
+    task.wait(0.15)
 
-        local connections = getconnections(button.MouseButton1Click)
-        if not connections then return end
+    local pos = btn.AbsolutePosition
+    local size = btn.AbsoluteSize
 
-        for _, connection in ipairs(connections) do
-            pcall(function()
-                if connection.Fire then
-                    connection:Fire()
-                elseif connection.Function then
-                    connection.Function()
-                end
-            end)
-        end
+    local x = pos.X + size.X / 2
+    local y = pos.Y + size.Y / 2
+
+    local ok = pcall(function()
+        -- finger down
+        VirtualInputManager:SendTouchEvent(1, 0, x, y)
+
+        task.wait(0.08)
+
+        -- finger up
+        VirtualInputManager:SendTouchEvent(1, 2, x, y)
     end)
 
-    if not success then
-        -- warn("FireSensorOnce failed safely")
-    end
+    gui:Destroy()
+    return ok
 end
 
--- run once
-Varz.FireSensorOnce()
+Varz.SimulateRealMobileTap();
 
+-- for emulators. will mess up mobiles
+-- Varz.SimulateScreenTapWithGui = function()
+--     local Players = game:GetService("Players")
+--     local VirtualInputManager = game:GetService("VirtualInputManager")
 
+--     local player = Players.LocalPlayer
+--     if not player then return false end
 
+--     local playerGui = player:FindFirstChild("PlayerGui")
+--     if not playerGui then return false end
 
--- The independent function
-Varz.SimulateKeyPress = function(keyCode)
-    local VirtualInputManager = game:GetService("VirtualInputManager")
-    -- 1. Simulate pressing the key down
-    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+--     local gui = Instance.new("ScreenGui")
+--     gui.IgnoreGuiInset = true
+--     gui.ResetOnSpawn = false
+--     gui.Parent = playerGui
 
-    -- 2. Wait a tiny fraction of a second (mimics a real human tap)
-    task.wait(0.1)
+--     local btn = Instance.new("TextButton")
+--     btn.Size = UDim2.fromScale(1, 1)
+--     btn.Position = UDim2.fromScale(0, 0)
+--     btn.BackgroundTransparency = 1
+--     btn.TextTransparency = 1
+--     btn.AutoButtonColor = false
+--     btn.ZIndex = 999999
+--     btn.Parent = gui
 
-    -- 3. Simulate releasing the key
-    VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
-end
+--     task.wait(0.1)
 
--- Press the "P" key
-Varz.SimulateKeyPress(Enum.KeyCode.P)
-Varz.SimulateKeyPress(Enum.KeyCode.A)
+--     local pos = btn.AbsolutePosition
+--     local size = btn.AbsoluteSize
+--     local x = pos.X + size.X / 2
+--     local y = pos.Y + size.Y / 2
+
+--     pcall(function()
+--         VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
+--         task.wait(0.05)
+--         VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
+--     end)
+
+--     gui:Destroy()
+--     return true
+-- end
+--Varz.SimulateScreenTapWithGui()
